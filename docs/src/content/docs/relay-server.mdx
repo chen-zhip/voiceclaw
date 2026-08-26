@@ -7,21 +7,39 @@ import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components'
 
 The relay server is a TypeScript / Node.js WebSocket server that sits between clients and AI providers. It translates the relay protocol into provider-specific formats (Gemini Live, Grok Voice, OpenAI Realtime), handles server-side tool calls, manages session lifecycle, and provides observability via Langfuse.
 
+## STT/TTS composed architecture
+
+`mode: "stt-tts"` selects a `ComposedAdapter` without changing the existing S2S adapters. The composed adapter orchestrates replaceable provider ports, while `OutputRouter` owns the separation of private thinking, spoken summaries, and detailed screen text.
+
+```mermaid
+flowchart LR
+    Client[WebSocket client] -->|PCM audio| Session[RelaySession]
+    Session --> Factory[createAdapter]
+    Factory --> Composed[ComposedAdapter]
+    Composed --> STT[STTProvider]
+    STT -->|final transcript| Harness[HarnessAdapter]
+    Harness -->|OutputChunk stream| Router[OutputRouter]
+    Router -->|speech only| TTS[TTSProvider]
+    TTS -->|audio.delta| Client
+    Router -->|text and sections| Client
+    Router -->|thinking only| Storage[ThinkingStorage]
+    Router -->|thinking metadata| Trace[TurnTracer]
+```
+
+See the repository's `docs/harness-integration.md` for Harness IDs and capability behavior, and `docs/stt-tts-migration.md` for opt-in migration from S2S.
+
 ## Running
 
 If you installed VoiceClaw from the DMG, you do not need to run anything — the relay starts automatically inside the desktop app. The sections below describe how to run the relay yourself when working on the relay code.
 
 <Tabs>
   <TabItem label="Development">
-    ```bash
-    cd relay-server
-    cp .env.example .env    # add your API keys
-    yarn install
-    yarn dev                # starts with tsx watch (auto-reload)
-    ```
+    ```bash cd relay-server cp .env.example .env # add your API keys yarn install yarn dev # starts
+    with tsx watch (auto-reload) ```
   </TabItem>
   <TabItem label="Production (bundled in DMG)">
-    No setup required. Open VoiceClaw and the relay starts on first launch. The Settings page shows the URL the desktop app is using.
+    No setup required. Open VoiceClaw and the relay starts on first launch. The Settings page shows
+    the URL the desktop app is using.
   </TabItem>
 </Tabs>
 
@@ -40,25 +58,28 @@ The bundle is produced by `yarn workspace voiceclaw-desktop dist:mac`, which dow
 In development you continue to run the relay via `concurrently` from the repo root (`yarn dev`). The desktop app's bundled-service spawn is a no-op when the bundled JavaScript is missing, so the renderer keeps talking to the locally tsx-watched relay.
 
 <Aside type="caution">
-Initial release ships **arm64 only**. Intel Macs hit the "node runtime not found" branch and the desktop app continues without a bundled relay, requiring users to point at an external relay endpoint via Settings. A darwin-x64 Node download (and a `lipo`-merged universal binary) is tracked as a follow-up.
+  Initial release ships **arm64 only**. Intel Macs hit the "node runtime not found" branch and the
+  desktop app continues without a bundled relay, requiring users to point at an external relay
+  endpoint via Settings. A darwin-x64 Node download (and a `lipo`-merged universal binary) is
+  tracked as a follow-up.
 </Aside>
 
 ## Configuration
 
 Environment variables (see `.env.example`):
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GEMINI_API_KEY` | Yes (for Gemini) | Google AI API key |
-| `OPENAI_API_KEY` | Yes (for OpenAI) | OpenAI API key |
-| `RELAY_API_KEY` | Recommended | Shared secret clients must send in `session.config.apiKey` |
-| `PORT` | No | Server port (default: `8080`) |
-| `BRAIN_GATEWAY_URL` | No | Brain agent gateway URL (default: `http://localhost:18789`) |
-| `BRAIN_GATEWAY_AUTH_TOKEN` | No | Auth token for the brain agent gateway |
-| `ROTATION_INTERVAL_MS` | No | OpenAI session rotation interval (default: `3000000` / 50 min) |
-| `LANGFUSE_BASE_URL` | No | Langfuse endpoint for tracing |
-| `LANGFUSE_PUBLIC_KEY` | No | Langfuse public key |
-| `LANGFUSE_SECRET_KEY` | No | Langfuse secret key |
+| Variable                   | Required         | Description                                                    |
+| -------------------------- | ---------------- | -------------------------------------------------------------- |
+| `GEMINI_API_KEY`           | Yes (for Gemini) | Google AI API key                                              |
+| `OPENAI_API_KEY`           | Yes (for OpenAI) | OpenAI API key                                                 |
+| `RELAY_API_KEY`            | Recommended      | Shared secret clients must send in `session.config.apiKey`     |
+| `PORT`                     | No               | Server port (default: `8080`)                                  |
+| `BRAIN_GATEWAY_URL`        | No               | Brain agent gateway URL (default: `http://localhost:18789`)    |
+| `BRAIN_GATEWAY_AUTH_TOKEN` | No               | Auth token for the brain agent gateway                         |
+| `ROTATION_INTERVAL_MS`     | No               | OpenAI session rotation interval (default: `3000000` / 50 min) |
+| `LANGFUSE_BASE_URL`        | No               | Langfuse endpoint for tracing                                  |
+| `LANGFUSE_PUBLIC_KEY`      | No               | Langfuse public key                                            |
+| `LANGFUSE_SECRET_KEY`      | No               | Langfuse secret key                                            |
 
 ## WebSocket Protocol
 
@@ -94,6 +115,7 @@ Must be the first message after connecting. Configures the session.
 ```
 
 Fields:
+
 - `provider` -- `"gemini"`, `"xai"`, or `"openai"`
 - `voice` -- voice name (Gemini: Puck, Charon, Kore, Fenrir, Aoede, Leda, Orus, Zephyr; xAI: eve, ara, rex, sal, leo; OpenAI: any supported voice, default "marin")
 - `model` -- model identifier (default: `gemini-3.1-flash-live-preview` for Gemini, `grok-voice-think-fast-1.0` for xAI, `gpt-realtime-mini` for OpenAI)
@@ -127,7 +149,8 @@ Stream microphone audio to the provider.
 ```
 
 <Aside type="note">
-Audio format: PCM16, 24kHz, mono. The relay handles downsampling for providers that need it (Gemini requires 16kHz).
+  Audio format: PCM16, 24kHz, mono. The relay handles downsampling for providers that need it
+  (Gemini requires 16kHz).
 </Aside>
 
 #### `audio.commit`
@@ -152,9 +175,7 @@ Send a screen capture frame (desktop screen sharing).
 }
 ```
 
-<Aside type="caution">
-Only supported by Gemini. OpenAI Realtime does not accept video input.
-</Aside>
+<Aside type="caution">Only supported by Gemini. OpenAI Realtime does not accept video input.</Aside>
 
 #### `response.create`
 
@@ -347,6 +368,7 @@ Error from the relay or upstream provider.
 ```
 
 Common error codes:
+
 - `400` -- invalid message format
 - `401` -- unauthorized (bad API key)
 - `500` -- adapter connection failed
