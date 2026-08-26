@@ -9,6 +9,7 @@
     "build:bundle": "node scripts/build-bundle.mjs",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
     "test:watch": "vitest",
     "test:integration:gemini-e2e": "tsx test/integration/gemini-e2e.ts",
     "test:integration:phase1a": "tsx test/integration/phase1a.ts",

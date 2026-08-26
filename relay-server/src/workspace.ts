@@ -5,10 +5,10 @@
 // AGENTS.md / IDENTITY.md / SOUL.md / FACTS.md seeds the model reads at
 // session start.
 
-import { promises as fs, readFileSync, existsSync } from "node:fs"
-import { homedir } from "node:os"
-import { dirname, isAbsolute, join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { promises as fs, readFileSync, existsSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export const DEFAULT_AGENTS_MD = `# Voiceclaw Agent Workspace
 
@@ -118,39 +118,39 @@ _(nothing yet)_
 export function getWorkspaceRoot(): string {
   const override = process.env.VOICECLAW_WORKSPACE?.trim()
   if (override) return resolve(override)
-  return join(homedir(), ".voiceclaw", "workspace")
+  return join(homedir(), '.voiceclaw', 'workspace')
 }
 
 export function getMemoryDir(): string {
-  return join(getWorkspaceRoot(), "memory")
+  return join(getWorkspaceRoot(), 'memory')
 }
 
 export function getAgentsMdPath(): string {
-  return join(getWorkspaceRoot(), "AGENTS.md")
+  return join(getWorkspaceRoot(), 'AGENTS.md')
 }
 
 export function getIdentityPath(): string {
-  return join(getWorkspaceRoot(), "IDENTITY.md")
+  return join(getWorkspaceRoot(), 'IDENTITY.md')
 }
 
 export function getSoulPath(): string {
-  return join(getWorkspaceRoot(), "SOUL.md")
+  return join(getWorkspaceRoot(), 'SOUL.md')
 }
 
 export function getFactsPath(): string {
-  return join(getWorkspaceRoot(), "FACTS.md")
+  return join(getWorkspaceRoot(), 'FACTS.md')
 }
 
 export function getSkillsDir(): string {
-  return join(getWorkspaceRoot(), "skills")
+  return join(getWorkspaceRoot(), 'skills')
 }
 
 export function getJobsDir(): string {
-  return join(getWorkspaceRoot(), "jobs")
+  return join(getWorkspaceRoot(), 'jobs')
 }
 
 export function getTasksDir(): string {
-  return join(getWorkspaceRoot(), "tasks")
+  return join(getWorkspaceRoot(), 'tasks')
 }
 
 // Resolves the packaged skill defaults directory. Sits next to the relay-server
@@ -160,7 +160,7 @@ export function getWorkspaceDefaultsDir(): string {
   const override = process.env.VOICECLAW_WORKSPACE_DEFAULTS?.trim()
   if (override) return resolve(override)
   const here = dirname(fileURLToPath(import.meta.url))
-  return resolve(here, "..", "workspace-defaults")
+  return resolve(here, '..', 'workspace-defaults')
 }
 
 export async function ensureWorkspace(): Promise<void> {
@@ -181,7 +181,7 @@ async function seedIfMissing(path: string, contents: string): Promise<void> {
   try {
     await fs.access(path)
   } catch {
-    await fs.writeFile(path, contents, "utf-8")
+    await fs.writeFile(path, contents, 'utf-8')
   }
 }
 
@@ -189,7 +189,7 @@ async function seedIfMissing(path: string, contents: string): Promise<void> {
 // into `~/.voiceclaw/workspace/skills/`, skipping files the user has already
 // customized. Mirrors `seedIfMissing` semantics: never overwrite.
 async function seedSkillsIfMissing(): Promise<void> {
-  const defaultsDir = join(getWorkspaceDefaultsDir(), "skills")
+  const defaultsDir = join(getWorkspaceDefaultsDir(), 'skills')
   let entries: string[]
   try {
     entries = await fs.readdir(defaultsDir)
@@ -197,7 +197,7 @@ async function seedSkillsIfMissing(): Promise<void> {
     return
   }
   for (const name of entries) {
-    if (!name.endsWith(".md")) continue
+    if (!name.endsWith('.md')) continue
     const source = join(defaultsDir, name)
     const dest = join(getSkillsDir(), name)
     try {
@@ -207,8 +207,8 @@ async function seedSkillsIfMissing(): Promise<void> {
       // not present — copy
     }
     try {
-      const contents = await fs.readFile(source, "utf-8")
-      await fs.writeFile(dest, contents, "utf-8")
+      const contents = await fs.readFile(source, 'utf-8')
+      await fs.writeFile(dest, contents, 'utf-8')
     } catch {
       // best-effort — a missing default shouldn't break session startup
     }
@@ -216,9 +216,9 @@ async function seedSkillsIfMissing(): Promise<void> {
 }
 
 export function formatDateYmd(date: Date): string {
-  const y = date.getFullYear().toString().padStart(4, "0")
-  const m = (date.getMonth() + 1).toString().padStart(2, "0")
-  const d = date.getDate().toString().padStart(2, "0")
+  const y = date.getFullYear().toString().padStart(4, '0')
+  const m = (date.getMonth() + 1).toString().padStart(2, '0')
+  const d = date.getDate().toString().padStart(2, '0')
   return `${y}-${m}-${d}`
 }
 
@@ -242,7 +242,7 @@ export async function loadRecentMemory(now: Date, daysBack: number): Promise<Mem
     d.setDate(d.getDate() - i)
     const path = resolveMemoryFile(d)
     try {
-      const contents = await fs.readFile(path, "utf-8")
+      const contents = await fs.readFile(path, 'utf-8')
       out.push({ date: formatDateYmd(d), path, contents })
     } catch {
       // missing — skip
@@ -262,7 +262,7 @@ export function loadRecentMemorySync(now: Date, daysBack: number): MemorySnapsho
     const path = resolveMemoryFile(d)
     if (!existsSync(path)) continue
     try {
-      const contents = readFileSync(path, "utf-8")
+      const contents = readFileSync(path, 'utf-8')
       out.push({ date: formatDateYmd(d), path, contents })
     } catch {
       // best-effort
@@ -290,7 +290,7 @@ export function readFactsSync(): string {
 function readWorkspaceFileSync(path: string, fallback: string): string {
   if (!existsSync(path)) return fallback
   try {
-    return readFileSync(path, "utf-8")
+    return readFileSync(path, 'utf-8')
   } catch {
     return fallback
   }
@@ -318,10 +318,10 @@ export interface PathResolution {
 // we realpath the full path.
 export async function resolveInsideWorkspace(
   inputPath: string,
-  opts: { allowMissingFile: boolean },
+  opts: { allowMissingFile: boolean }
 ): Promise<PathResolution> {
-  if (typeof inputPath !== "string" || inputPath.length === 0) {
-    return { ok: false, reason: "path is empty" }
+  if (typeof inputPath !== 'string' || inputPath.length === 0) {
+    return { ok: false, reason: 'path is empty' }
   }
   const root = getWorkspaceRoot()
   const candidate = isAbsolute(inputPath) ? inputPath : join(root, inputPath)
@@ -367,7 +367,9 @@ export async function resolveInsideWorkspace(
 // resolves inside the workspace. Catches the case where a freshly-created
 // symlink redirected the write outside the workspace between the parent
 // check and the open.
-export async function verifyWrittenPathInside(absPath: string): Promise<{ ok: boolean, reason?: string }> {
+export async function verifyWrittenPathInside(
+  absPath: string
+): Promise<{ ok: boolean; reason?: string }> {
   const root = getWorkspaceRoot()
   let rootReal: string
   try {
@@ -388,9 +390,8 @@ export async function verifyWrittenPathInside(absPath: string): Promise<{ ok: bo
 }
 
 function isInside(candidate: string, root: string): boolean {
-  if (candidate === root) return true
-  const rootWithSep = root.endsWith("/") ? root : `${root}/`
-  return candidate.startsWith(rootWithSep)
+  const pathFromRoot = relative(root, candidate)
+  return pathFromRoot === '' || (!pathFromRoot.startsWith('..') && !isAbsolute(pathFromRoot))
 }
 
 // Bash safety guardrail — NOT a security boundary. A determined adversary with
@@ -405,95 +406,100 @@ function isInside(candidate: string, root: string): boolean {
 // Patterns are intentionally conservative. We normalize backslash-escapes from
 // the raw string ("\s\u\d\o" → "sudo") before matching so a single class of
 // shell-quote bypasses doesn't render the regexes useless.
-const BASH_DENY_PATTERNS: { re: RegExp, reason: string }[] = [
+const BASH_DENY_PATTERNS: { re: RegExp; reason: string }[] = [
   {
     re: /(^|\s|;|&&|\|\||\||`|\$\()\s*sudo(\s|$)/i,
-    reason: "sudo is not allowed",
+    reason: 'sudo is not allowed',
   },
   {
     re: /(^|\s|;|&&|\|\||\||`|\$\()\s*doas(\s|$)/i,
-    reason: "doas is not allowed",
+    reason: 'doas is not allowed',
   },
   {
     // rm with -r or -R or -rf or -fr (any order) — flag the destructive form.
     re: /(^|\s|;|&&|\|\||\||`|\$\()\s*rm\s+(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\b/,
-    reason: "rm -r is not allowed (use targeted deletion or imperative agent)",
+    reason: 'rm -r is not allowed (use targeted deletion or imperative agent)',
   },
   {
     // pipe-to-shell from network fetcher: curl/wget … | sh|bash|zsh
     re: /\b(curl|wget|fetch)\b[^|]*\|\s*(sh|bash|zsh|ksh|fish)\b/,
-    reason: "pipe-to-shell from network fetcher is not allowed",
+    reason: 'pipe-to-shell from network fetcher is not allowed',
   },
   {
     // touch credential dirs
     re: /(~|\$HOME|\/Users\/[^\s/]+|\/home\/[^\s/]+)\/(\.ssh|\.aws|\.gnupg|\.config\/gh|\.config\/op|\.config\/gcloud|\.kube|\.docker)\b/i,
-    reason: "credential directories are not allowed",
+    reason: 'credential directories are not allowed',
   },
   {
     // direct disk / mount fiddling
     re: /(^|\s|;|&&|\|\||`|\$\()\s*(mkfs|fdisk|mount|umount|diskutil\s+erase)\b/i,
-    reason: "disk/mount commands are not allowed",
+    reason: 'disk/mount commands are not allowed',
   },
   {
     re: /(^|\s|;|&&|\|\||`|\$\()\s*dd\s+if=/i,
-    reason: "dd write commands are not allowed",
+    reason: 'dd write commands are not allowed',
   },
   {
     // shell-c re-exec — common prompt-injection / decode-and-run pattern.
     re: /(^|\s|;|&&|\|\||\||`|\$\()\s*(bash|sh|zsh|ksh|fish|dash)\s+-c\b/,
-    reason: "shell -c re-exec is not allowed (use the command directly)",
+    reason: 'shell -c re-exec is not allowed (use the command directly)',
   },
   {
     // eval / exec of arbitrary strings.
     re: /(^|\s|;|&&|\|\||\||`|\$\()\s*eval(\s|$)/,
-    reason: "eval is not allowed",
+    reason: 'eval is not allowed',
   },
   {
     // base64 / xxd decode (typical encoded-payload trick).
     re: /\bbase64\s+(-d|--decode|-D)\b/,
-    reason: "base64 -d is not allowed (decode + exec is a common injection pattern)",
+    reason: 'base64 -d is not allowed (decode + exec is a common injection pattern)',
   },
   {
     re: /\bxxd\s+-r\b/,
-    reason: "xxd -r is not allowed (decode + exec is a common injection pattern)",
+    reason: 'xxd -r is not allowed (decode + exec is a common injection pattern)',
   },
   {
     // find ... -exec / -delete — arbitrary-command-per-result is the same
     // hazard as rm -r and a classic credential-scan pattern.
     re: /\bfind\b[^|;]*\s+-(exec|execdir|delete)\b/,
-    reason: "find -exec / -delete is not allowed (use targeted commands instead)",
+    reason: 'find -exec / -delete is not allowed (use targeted commands instead)',
   },
   {
     // env / printenv dump entire environment, which includes provider keys.
     // The honest fix here is env scrubbing in the spawn, but the cheap fix is
     // to refuse the trivial one-liner.
     re: /(^|\s|;|&&|\|\||\||`|\$\()\s*(env|printenv)(\s|$)/,
-    reason: "env / printenv is not allowed (would dump provider keys)",
+    reason: 'env / printenv is not allowed (would dump provider keys)',
   },
   {
     // network listeners / arbitrary sockets — common reverse-shell payloads.
     re: /(^|\s|;|&&|\|\||\||`|\$\()\s*(nc|ncat|netcat|socat)(\s|$)/,
-    reason: "nc / socat is not allowed (reverse-shell footgun)",
+    reason: 'nc / socat is not allowed (reverse-shell footgun)',
   },
   {
     // chmod 777 / world-writable bits.
     re: /\bchmod\s+(-R\s+)?[0-7]*7[0-7]*7\b/,
-    reason: "chmod with world-writable bits is not allowed",
+    reason: 'chmod with world-writable bits is not allowed',
   },
 ]
 
-export interface BashCheckOk { ok: true }
-export interface BashCheckDenied { ok: false, reason: string }
+export interface BashCheckOk {
+  ok: true
+}
+export interface BashCheckDenied {
+  ok: false
+  reason: string
+}
 export type BashCheckResult = BashCheckOk | BashCheckDenied
 
 export function checkBashCommand(command: string): BashCheckResult {
-  if (typeof command !== "string" || command.trim().length === 0) {
-    return { ok: false, reason: "command is empty" }
+  if (typeof command !== 'string' || command.trim().length === 0) {
+    return { ok: false, reason: 'command is empty' }
   }
   // Normalize raw backslash-escapes: \s\u\d\o, c\at, r\m, etc. The shell drops
   // a single leading backslash before any alpha char, so "s\udo" parses as
   // "sudo". Strip those before matching so the literal-string regexes work.
-  const normalized = command.replace(/\\([a-zA-Z])/g, "$1")
+  const normalized = command.replace(/\\([a-zA-Z])/g, '$1')
   for (const { re, reason } of BASH_DENY_PATTERNS) {
     if (re.test(command) || re.test(normalized)) {
       return { ok: false, reason }
