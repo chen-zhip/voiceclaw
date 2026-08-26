@@ -25,3 +25,17 @@ cp ../voiceclaw/<workspace>/.env <workspace>/ 2>/dev/null || true
 # Reviewer alignment
 
 `AGENTS.md` is a symlink to this file so Codex (which reads `AGENTS.md`) sees the same rules as Claude (which reads `CLAUDE.md`). When updating rules, edit `CLAUDE.md` — never edit `AGENTS.md` directly.
+
+# Agent skills
+
+## OpenSpec TDD
+
+For any OpenSpec workflow that creates or revises a tasks artifact, or applies a change, invoke `$tdd` first and follow the TDD contract in `openspec/config.yaml`.
+
+## Issue tracker
+
+Issues live as markdown files under `.scratch/<feature>/` in this repo. See `docs/agents/issue-tracker.md`.
+
+## Domain docs
+
+Multi-context — a root `CONTEXT-MAP.md` pointing to one `CONTEXT.md` per workspace, plus `docs/adr/` at the root. See `docs/agents/domain.md`.
