@@ -1,0 +1,58 @@
+schema: spec-driven
+
+context: |
+  OpenSpec artifacts are the reviewed implementation baseline.
+  Skill names in rules and operation guidance are mandatory agent actions;
+  OpenSpec provides the guidance but does not execute skills as hooks.
+  Domain terminology follows CONTEXT-MAP.md and the workspace CONTEXT.md files.
+  Durable architectural decisions belong in docs/adr/.
+
+rules:
+  proposal:
+    - Do not finalize a proposal while scope, externally observable behavior, compatibility, or acceptance criteria remain materially ambiguous.
+    - When requirements are unclear, return to `$grill-with-docs` before continuing the proposal.
+    - When terminology conflicts, core domain concepts, or ADR-worthy decisions arise, invoke `$domain-modeling` and reflect the result in the domain documents or ADR before continuing.
+    - When a critical state-model, logic, or UI decision cannot be settled through discussion, invoke `$prototype` and record its verdict in design.md or an ADR.
+  specs:
+    - Specify externally observable behavior with requirements and scenarios precise enough to become independent behavior-test expectations.
+    - Keep implementation details out of specs unless they are externally observable constraints.
+  design:
+    - Record resolved domain-language changes and ADR-worthy decisions before implementation begins.
+    - If `$prototype` was used, record the question, verdict, evidence pointer, and resulting decision; prototype code is not production code.
+    - Record a fixed Git comparison point for the final `$code-review`.
+  tasks:
+    - Invoke `$tdd` before drafting or revising the tasks artifact.
+    - Identify the public test seams and obtain user confirmation before finalizing test tasks.
+    - Order unfinished tasks by dependency and make every implementation task one independently verifiable vertical behavior slice.
+    - Never create one change-wide TDD task; every independently verifiable implementation task gets its own `$tdd` cycle during apply.
+    - Split a task before implementation when it cannot be completed by one focused RED-GREEN cycle.
+    - Preserve completed work as existing GREEN evidence; never invent retrospective RED evidence.
+    - Every implementation task names its confirmed public seam, exact RED command, expected failure reason, minimum GREEN scope, and task-level verification.
+    - Keep task-local refactoring after GREEN and outside the RED-GREEN cycle; rerun the behavior test after refactoring.
+    - Keep documentation, manual checks, broad regression, and performance acceptance outside the RED-GREEN cycle.
+    - Mark a task complete only after its declared verification succeeds.
+    - After writing or revising tasks.md, run `openspec validate <change-name> --strict`; report the artifacts ready for implementation only after it succeeds.
+
+operations:
+  apply:
+    guidance:
+      - Process unfinished tasks.md tasks strictly in dependency order.
+      - Before every independently verifiable implementation task, invoke `$tdd`; invoking it once for the whole change is insufficient.
+      - Confirm that task's declared public seam before writing its behavior test; pause if confirmation is absent.
+      - Run the exact RED command and verify the expected behavioral failure before editing production code.
+      - During GREEN, make only the minimum production change required by the current RED test, then rerun the same command.
+      - After GREEN, perform any task-local refactoring as a separate review step and keep the behavior test green.
+      - Run the task's declared verification and mark it complete only after that verification succeeds.
+      - If a task is too large for one focused RED-GREEN cycle, pause, split it in tasks.md, and revalidate the change before continuing.
+      - For a non-obvious bug, regression, or performance failure, invoke `$diagnosing-bugs`, then invoke `$tdd` to create the regression test through the correct public seam before applying the repair.
+      - If requirements, acceptance behavior, or the technical direction must change, pause implementation, invoke `$openspec-update-change` to revise the affected artifacts, run `openspec validate <change-name> --strict`, and only then resume apply.
+      - If implementation reveals a terminology conflict or missing durable decision, invoke `$domain-modeling`, update the domain document or ADR, invoke `$openspec-update-change` to reconcile the artifacts, and revalidate before resuming.
+      - Invoke `$prototype` only when a critical design question cannot be resolved from the reviewed artifacts and existing code; record the verdict before resuming apply.
+  archive:
+    guidance:
+      - Do not archive until every tasks.md checkbox is complete and every declared verification has succeeded.
+      - Invoke `$code-review` using the fixed Git comparison point recorded for the change.
+      - Run Standards review against repository instructions and Spec review against the change proposal, specs, design, and tasks.
+      - Resolve blocking review findings and rerun the affected task and full-change verification.
+      - Run `openspec validate <change-name> --strict` immediately before archiving.
+      - Archive only after strict validation succeeds.

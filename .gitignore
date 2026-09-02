@@ -40,7 +40,10 @@ desktop/dist-staging/
 
 # Dev logs
 logs/
-openspec/
+
+# OpenSpec planning data is local; the workflow contract is shared.
+openspec/*
+!openspec/config.yaml
 
 # Inter-agent ephemeral handoffs (research → implementer in same session).
 # Per repo convention, agent-produced design notes / recon outputs that the

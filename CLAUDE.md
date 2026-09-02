@@ -28,9 +28,14 @@ cp ../voiceclaw/<workspace>/.env <workspace>/ 2>/dev/null || true
 
 # Agent skills
 
-## OpenSpec TDD
+## OpenSpec workflow
 
-For any OpenSpec workflow that creates or revises a tasks artifact, or applies a change, invoke `$tdd` first and follow the TDD contract in `openspec/config.yaml`.
+For every formal change, follow the lifecycle and completion gates in `openspec/config.yaml`:
+
+1. When requirements are materially unclear, invoke `$grill-with-docs`; use `$domain-modeling` for terminology, core concepts, or ADR-worthy decisions, and `$prototype` only for a critical design question that discussion cannot settle.
+2. Once requirements are agreed, invoke `$openspec-propose`, review every artifact, and run `openspec validate <change-name> --strict`. Begin implementation only after review and validation succeed.
+3. Invoke `$openspec-apply-change` and process tasks.md in dependency order. Invoke `$tdd` separately for every independently verifiable implementation task. If the agreed behavior or design changes, invoke `$openspec-update-change`, revalidate, then resume apply.
+4. After every task is verified, invoke `$code-review` with the recorded fixed Git point and the change artifacts. Resolve findings, rerun strict validation, then invoke `$openspec-archive-change`.
 
 ## Issue tracker
 

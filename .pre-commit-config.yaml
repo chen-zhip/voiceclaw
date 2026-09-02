@@ -5,7 +5,6 @@ default_stages:
   - pre-commit
 
 repos:
-  # Fast repository hygiene checks.
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
@@ -16,7 +15,6 @@ repos:
       - id: check-yaml
       - id: check-json
 
-  # Use this repository's Prettier version and Tailwind plugin.
   - repo: local
     hooks:
       - id: prettier
@@ -25,7 +23,6 @@ repos:
         language: system
         files: \.(cjs|css|graphql|html|js|json|jsx|md|mdx|mjs|scss|ts|tsx|yaml|yml)$
 
-      # ESLint is currently configured only for the website workspace.
       - id: eslint-website
         name: ESLint (website)
         entry: yarn lint:web --fix
@@ -33,24 +30,14 @@ repos:
         files: ^website/.*\.(cjs|js|jsx|mjs|ts|tsx)$
         pass_filenames: false
 
-      # TypeScript is checked across every installed Yarn workspace.
       - id: typescript
         name: TypeScript type check
-        entry: yarn typecheck
+        entry: yarn typecheck:all
         language: system
         files: \.(ts|tsx)$
         pass_filenames: false
 
-  # Prevent credentials generated or copied by an agent from being committed.
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.28.0
     hooks:
       - id: gitleaks
-
-  # Conventional commit messages; install the commit-msg stage separately.
-  - repo: https://github.com/commitizen-tools/commitizen
-    rev: v4.8.3
-    hooks:
-      - id: commitizen
-        stages:
-          - commit-msg
