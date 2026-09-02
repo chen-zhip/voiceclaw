@@ -8,15 +8,15 @@
 //   - Empty old_string is rejected (cannot anchor a replacement).
 //   - Trailing newline behavior is preserved naturally by string-replace.
 
-import { promises as fs, constants as fsConstants } from "node:fs"
-import { isAbsolute, join, resolve } from "node:path"
+import { promises as fs, constants as fsConstants } from 'node:fs'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import {
   getWorkspaceRoot,
   resolveInsideWorkspace,
   verifyWrittenPathInside,
-} from "../../workspace.js"
+} from '../../workspace.js'
 
-export const EDIT_TOOL_NAME = "edit"
+export const EDIT_TOOL_NAME = 'edit'
 
 export const EDIT_TOOL_DESCRIPTION = `Performs an exact-string find-and-replace on a file inside the voiceclaw workspace (~/.voiceclaw/workspace/).
 
@@ -28,26 +28,28 @@ export const EDIT_TOOL_DESCRIPTION = `Performs an exact-string find-and-replace 
 - For longer rewrites it is fine to read the file first, then edit a unique region.`
 
 export const EDIT_TOOL_PARAMETERS = {
-  type: "object",
+  type: 'object',
   properties: {
     path: {
-      type: "string",
-      description: "Workspace-relative path, or absolute path inside the workspace.",
+      type: 'string',
+      description: 'Workspace-relative path, or absolute path inside the workspace.',
     },
     old_string: {
-      type: "string",
-      description: "Exact text to find. Must match the file verbatim, including whitespace and newlines.",
+      type: 'string',
+      description:
+        'Exact text to find. Must match the file verbatim, including whitespace and newlines.',
     },
     new_string: {
-      type: "string",
-      description: "Text that replaces old_string. May be empty to delete.",
+      type: 'string',
+      description: 'Text that replaces old_string. May be empty to delete.',
     },
     replace_all: {
-      type: "boolean",
-      description: "When true, every occurrence of old_string is replaced. Default false — a non-unique old_string is an error.",
+      type: 'boolean',
+      description:
+        'When true, every occurrence of old_string is replaced. Default false — a non-unique old_string is an error.',
     },
   },
-  required: ["path", "old_string", "new_string"],
+  required: ['path', 'old_string', 'new_string'],
 } as const
 
 export interface EditArgs {
@@ -68,34 +70,32 @@ export interface EditError {
 }
 
 export async function runEdit(args: EditArgs): Promise<EditResult | EditError> {
-  if (typeof args.path !== "string" || args.path.length === 0) {
-    return { error: "path is required" }
+  if (typeof args.path !== 'string' || args.path.length === 0) {
+    return { error: 'path is required' }
   }
-  if (typeof args.old_string !== "string") {
-    return { error: "old_string is required" }
+  if (typeof args.old_string !== 'string') {
+    return { error: 'old_string is required' }
   }
-  if (typeof args.new_string !== "string") {
-    return { error: "new_string is required" }
+  if (typeof args.new_string !== 'string') {
+    return { error: 'new_string is required' }
   }
   if (args.old_string.length === 0) {
-    return { error: "old_string must not be empty" }
+    return { error: 'old_string must not be empty' }
   }
   if (args.old_string === args.new_string) {
-    return { error: "old_string and new_string are identical — no edit to perform" }
+    return { error: 'old_string and new_string are identical — no edit to perform' }
   }
   const replaceAll = args.replace_all === true
 
   const root = getWorkspaceRoot()
-  const candidate = isAbsolute(args.path)
-    ? resolve(args.path)
-    : resolve(join(root, args.path))
+  const candidate = isAbsolute(args.path) ? resolve(args.path) : resolve(join(root, args.path))
   if (!isLexicallyInside(candidate, root)) {
     return { error: `path escapes workspace: ${candidate} not inside ${root}` }
   }
 
   const resolved = await resolveInsideWorkspace(candidate, { allowMissingFile: false })
   if (!resolved.ok || !resolved.resolved) {
-    return { error: resolved.reason ?? "path resolution failed" }
+    return { error: resolved.reason ?? 'path resolution failed' }
   }
 
   // Reject leaf symlinks before reading/writing so an existing symlink that
@@ -113,16 +113,16 @@ export async function runEdit(args: EditArgs): Promise<EditResult | EditError> {
   let original: string
   try {
     // O_NOFOLLOW on the read fails (ELOOP) if the leaf is suddenly a symlink.
-    const readFlags = fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
+    const readFlags = process.platform === 'win32' ? 'r' : fsConstants.O_RDONLY | noFollowFlag()
     const handle = await fs.open(resolved.resolved, readFlags)
     try {
-      original = await handle.readFile("utf-8")
+      original = await handle.readFile('utf-8')
     } finally {
       await handle.close().catch(() => undefined)
     }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
-    if (code === "ELOOP" || code === "EMLINK") {
+    if (code === 'ELOOP' || code === 'EMLINK') {
       return { error: `refusing to edit through symlink: ${resolved.resolved}` }
     }
     return { error: `read failed: ${(err as Error).message}` }
@@ -147,7 +147,8 @@ export async function runEdit(args: EditArgs): Promise<EditResult | EditError> {
     replaced = occurrences
   } else {
     const idx = original.indexOf(args.old_string)
-    updated = original.slice(0, idx) + args.new_string + original.slice(idx + args.old_string.length)
+    updated =
+      original.slice(0, idx) + args.new_string + original.slice(idx + args.old_string.length)
     replaced = 1
   }
 
@@ -158,16 +159,19 @@ export async function runEdit(args: EditArgs): Promise<EditResult | EditError> {
   try {
     // O_NOFOLLOW + O_TRUNC: if a symlink raced into place between the read and
     // here, the open fails with ELOOP — we never write through it.
-    const writeFlags = fsConstants.O_WRONLY | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW
+    const writeFlags =
+      process.platform === 'win32'
+        ? 'w'
+        : fsConstants.O_WRONLY | fsConstants.O_TRUNC | noFollowFlag()
     const handle = await fs.open(resolved.resolved, writeFlags)
     try {
-      await handle.writeFile(updated, "utf-8")
+      await handle.writeFile(updated, 'utf-8')
     } finally {
       await handle.close().catch(() => undefined)
     }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
-    if (code === "ELOOP" || code === "EMLINK") {
+    if (code === 'ELOOP' || code === 'EMLINK') {
       return { error: `refusing to edit through symlink: ${resolved.resolved}` }
     }
     return { error: `write failed: ${(err as Error).message}` }
@@ -177,32 +181,34 @@ export async function runEdit(args: EditArgs): Promise<EditResult | EditError> {
   if (!verify.ok) {
     // Restore. We have the original in memory.
     try {
-      const writeFlags = fsConstants.O_WRONLY | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW
+      const writeFlags =
+        process.platform === 'win32'
+          ? 'w'
+          : fsConstants.O_WRONLY | fsConstants.O_TRUNC | noFollowFlag()
       const handle = await fs.open(resolved.resolved, writeFlags)
       try {
-        await handle.writeFile(original, "utf-8")
+        await handle.writeFile(original, 'utf-8')
       } finally {
         await handle.close().catch(() => undefined)
       }
     } catch {
       // best-effort restore
     }
-    return { error: verify.reason ?? "edited path escaped workspace" }
+    return { error: verify.reason ?? 'edited path escaped workspace' }
   }
 
   return {
     replaced,
     path: resolved.resolved,
-    bytes: Buffer.byteLength(updated, "utf-8"),
+    bytes: Buffer.byteLength(updated, 'utf-8'),
   }
 }
 
 function isLexicallyInside(candidate: string, root: string): boolean {
   const resolvedCandidate = resolve(candidate)
   const resolvedRoot = resolve(root)
-  if (resolvedCandidate === resolvedRoot) return true
-  const rootWithSep = resolvedRoot.endsWith("/") ? resolvedRoot : `${resolvedRoot}/`
-  return resolvedCandidate.startsWith(rootWithSep)
+  const pathFromRoot = relative(resolvedRoot, resolvedCandidate)
+  return pathFromRoot === '' || (!pathFromRoot.startsWith('..') && !isAbsolute(pathFromRoot))
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -222,4 +228,8 @@ function countOccurrences(haystack: string, needle: string): number {
 // avoids regex escaping and matches the literal string exactly.
 function splitJoin(haystack: string, needle: string, replacement: string): string {
   return haystack.split(needle).join(replacement)
+}
+
+function noFollowFlag(): number {
+  return process.platform === 'win32' ? 0 : fsConstants.O_NOFOLLOW
 }

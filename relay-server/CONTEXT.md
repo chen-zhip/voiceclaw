@@ -4,21 +4,43 @@ The Relay context is VoiceClaw's authenticated conversation orchestration bounda
 
 ## Language
 
+### Conversation paths
+
+**Conversation Pipeline**:
+The selected path that turns user input into assistant output for one Relay Session.
+_Avoid_: Voice mode, agent backend
+
+**S2S Direct**:
+An S2S pipeline in which the realtime voice model invokes Relay-provided tools directly.
+_Avoid_: Harness mode, operator mode
+
+**S2S Operator**:
+An S2S pipeline in which the realtime voice model delegates a task to a Brain Agent through `ask_brain`.
+_Avoid_: Harness mode, direct mode
+
+**STT/TTS Harness**:
+A composed pipeline in which finalized recognized text is handled by a Harness and its speech output is synthesized separately.
+_Avoid_: Brain call, S2S mode
+
 ### Agent execution
 
 **Brain Agent**:
-The task-level delegate used by the operator path. It answers an `ask_brain` request but does not own the surrounding voice conversation.
+The task-level delegate used by S2S Operator. It answers an `ask_brain` request but does not own the surrounding voice conversation.
 _Avoid_: Harness, realtime voice provider
 
 **Harness**:
-The primary agent executor for a Harness-backed conversation turn and the owner of work performed in its bound workspace.
-_Avoid_: Desktop Host, Brain Agent
+The primary agent executor for an STT/TTS Harness conversation turn and the owner of work performed in its bound workspace.
+_Avoid_: Harness Adapter as a synonym for the executor, Brain Agent, Desktop Host
+
+**Harness Integration Contract**:
+The provider-neutral messages and states exchanged between Relay and a Desktop-hosted VoiceClaw Integration Plugin.
+_Avoid_: Harness Adapter in domain prose, Harness-native protocol, provider runtime, Relay-side provider implementation
 
 ### Extension model
 
 **Harness Plugin**:
 A Harness-native extension that supplies agent behavior such as a skill, command, tool, or workflow.
-_Avoid_: VoiceClaw Core feature
+_Avoid_: Harness Adapter, VoiceClaw Core feature
 
 **VoiceClaw Integration Plugin**:
 A trusted local VoiceClaw extension that carries provider-specific protocol, version, Capability Profile, configuration, and translation knowledge without reimplementing agent behavior.
@@ -82,6 +104,18 @@ _Avoid_: Harness deletion, temporary sync failure
 Durable facts, preferences, and knowledge derived for future agent work, normally maintained by the active executor or a Harness Plugin.
 _Avoid_: Conversation Archive, raw transcript
 
+**Structured Output**:
+Harness output separated into private thinking, concise speech, and detailed screen text.
+_Avoid_: Transcript, raw provider event
+
+**Semantic Output**:
+The task result and meaning authored by the active agent executor. VoiceClaw may validate and present it but does not silently change its conclusions.
+_Avoid_: Presentation state, client event
+
+**Presentation State**:
+VoiceClaw-authored interaction information such as progress, routing, synthesis, and display state that does not alter Semantic Output.
+_Avoid_: Task result, agent conclusion
+
 ### Authority boundaries
 
 **Task Side Effect**:
@@ -99,3 +133,11 @@ _Avoid_: Intent Confirmation, VoiceClaw permission
 **Approval Route**:
 The path that presents a Provider-native Approval through Relay to an active paired Client while leaving enforcement and timeout semantics with the Harness Provider.
 _Avoid_: Relay approval, automatic approval
+
+**Explicit Fallback**:
+A user-visible choice to retry or change the active pipeline or provider without silently transferring work to another executor.
+_Avoid_: Automatic executor failover, implicit Direct fallback
+
+**Recovery Guidance**:
+Actionable instructions for resubmitting input or explicitly selecting another Conversation Pipeline when no executable recovery contract exists.
+_Avoid_: Automatic retry, resumable recovery protocol

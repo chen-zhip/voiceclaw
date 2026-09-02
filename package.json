@@ -21,7 +21,7 @@
     "build:web": "cd website && yarn build",
     "start:web": "cd website && yarn start",
     "lint:web": "cd website && yarn lint",
-    "typecheck:all": "yarn workspace voiceclaw-desktop typecheck && yarn workspace relay-server tsc --noEmit && yarn workspace voiceclaw-web tsc --noEmit && yarn workspace voiceclaw-mobile tsc --noEmit && yarn workspace voiceclaw-tracing-collector tsc --noEmit && yarn workspace voiceclaw-tracing-ui typecheck",
+    "typecheck:all": "yarn workspace voiceclaw-desktop typecheck && yarn workspace relay-server tsc --noEmit && yarn workspace relay-server typecheck:test && yarn workspace voiceclaw-web tsc --noEmit && yarn workspace voiceclaw-mobile tsc --noEmit && yarn workspace voiceclaw-tracing-collector tsc --noEmit && yarn workspace voiceclaw-tracing-ui typecheck",
     "run:ios": "cd mobile && yarn run:ios",
     "run:ios:device": "cd mobile && yarn run:ios:device",
     "run:ios:release": "cd mobile && yarn run:ios:release",
