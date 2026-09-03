@@ -4,15 +4,15 @@
 // open uses O_NOFOLLOW so a freshly-installed leaf symlink cannot redirect the
 // write to an outside target between the containment check and the open.
 
-import { promises as fs, constants as fsConstants } from "node:fs"
-import { dirname, isAbsolute, join, resolve } from "node:path"
+import { promises as fs, constants as fsConstants } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import {
   getWorkspaceRoot,
   resolveInsideWorkspace,
   verifyWrittenPathInside,
-} from "../../workspace.js"
+} from '../../workspace.js'
 
-export const WRITE_TOOL_NAME = "write"
+export const WRITE_TOOL_NAME = 'write'
 
 export const WRITE_TOOL_DESCRIPTION = `Writes content to a file inside the voiceclaw workspace (~/.voiceclaw/workspace/).
 
@@ -24,18 +24,18 @@ export const WRITE_TOOL_DESCRIPTION = `Writes content to a file inside the voice
 - To save a voice note to today's memory file, create or append-via-edit on memory/YYYY-MM-DD.md.`
 
 export const WRITE_TOOL_PARAMETERS = {
-  type: "object",
+  type: 'object',
   properties: {
     path: {
-      type: "string",
-      description: "Workspace-relative path, or absolute path inside the workspace.",
+      type: 'string',
+      description: 'Workspace-relative path, or absolute path inside the workspace.',
     },
     content: {
-      type: "string",
-      description: "Full file contents. Existing files are overwritten.",
+      type: 'string',
+      description: 'Full file contents. Existing files are overwritten.',
     },
   },
-  required: ["path", "content"],
+  required: ['path', 'content'],
 } as const
 
 export interface WriteArgs {
@@ -54,19 +54,17 @@ export interface WriteError {
 }
 
 export async function runWrite(args: WriteArgs): Promise<WriteResult | WriteError> {
-  if (typeof args.path !== "string" || args.path.length === 0) {
-    return { error: "path is required" }
+  if (typeof args.path !== 'string' || args.path.length === 0) {
+    return { error: 'path is required' }
   }
-  if (typeof args.content !== "string") {
-    return { error: "content must be a string" }
+  if (typeof args.content !== 'string') {
+    return { error: 'content must be a string' }
   }
 
   const root = getWorkspaceRoot()
   // Resolve the candidate lexically against the workspace root FIRST. This
   // catches "../../tmp/evil" before any mkdir or open touches disk.
-  const candidate = isAbsolute(args.path)
-    ? resolve(args.path)
-    : resolve(join(root, args.path))
+  const candidate = isAbsolute(args.path) ? resolve(args.path) : resolve(join(root, args.path))
   if (!isLexicallyInside(candidate, root)) {
     return { error: `path escapes workspace: ${candidate} not inside ${root}` }
   }
@@ -95,7 +93,7 @@ export async function runWrite(args: WriteArgs): Promise<WriteResult | WriteErro
 
   const resolved = await resolveInsideWorkspace(candidate, { allowMissingFile: true })
   if (!resolved.ok || !resolved.resolved) {
-    return { error: resolved.reason ?? "path resolution failed" }
+    return { error: resolved.reason ?? 'path resolution failed' }
   }
 
   // Reject leaf symlinks BEFORE writing — refuse to follow a freshly-installed
@@ -109,7 +107,7 @@ export async function runWrite(args: WriteArgs): Promise<WriteResult | WriteErro
     }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
-    if (code !== "ENOENT") {
+    if (code !== 'ENOENT') {
       return { error: `lstat failed: ${(err as Error).message}` }
     }
     // ENOENT means leaf doesn't exist yet — that's the create case.
@@ -118,20 +116,20 @@ export async function runWrite(args: WriteArgs): Promise<WriteResult | WriteErro
   // O_NOFOLLOW on the leaf: if a symlink races into place between lstat and
   // open, the open fails with ELOOP. O_CREAT | O_TRUNC | O_WRONLY mirrors the
   // semantics of writeFile.
-  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW
+  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | noFollowFlag()
   let handle: fs.FileHandle
   try {
     handle = await fs.open(resolved.resolved, flags, 0o600)
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
-    if (code === "ELOOP" || code === "EMLINK") {
+    if (code === 'ELOOP' || code === 'EMLINK') {
       return { error: `refusing to write through symlink: ${resolved.resolved}` }
     }
     return { error: `open failed: ${(err as Error).message}` }
   }
 
   try {
-    await handle.writeFile(args.content, "utf-8")
+    await handle.writeFile(args.content, 'utf-8')
   } catch (err) {
     return { error: `write failed: ${(err as Error).message}` }
   } finally {
@@ -145,12 +143,12 @@ export async function runWrite(args: WriteArgs): Promise<WriteResult | WriteErro
     } catch {
       // best-effort
     }
-    return { error: verify.reason ?? "written path escaped workspace" }
+    return { error: verify.reason ?? 'written path escaped workspace' }
   }
 
   return {
     written: true,
-    bytes: Buffer.byteLength(args.content, "utf-8"),
+    bytes: Buffer.byteLength(args.content, 'utf-8'),
     path: resolved.resolved,
   }
 }
@@ -158,7 +156,10 @@ export async function runWrite(args: WriteArgs): Promise<WriteResult | WriteErro
 function isLexicallyInside(candidate: string, root: string): boolean {
   const resolvedCandidate = resolve(candidate)
   const resolvedRoot = resolve(root)
-  if (resolvedCandidate === resolvedRoot) return true
-  const rootWithSep = resolvedRoot.endsWith("/") ? resolvedRoot : `${resolvedRoot}/`
-  return resolvedCandidate.startsWith(rootWithSep)
+  const pathFromRoot = relative(resolvedRoot, resolvedCandidate)
+  return pathFromRoot === '' || (!pathFromRoot.startsWith('..') && !isAbsolute(pathFromRoot))
+}
+
+function noFollowFlag(): number {
+  return process.platform === 'win32' ? 0 : fsConstants.O_NOFOLLOW
 }

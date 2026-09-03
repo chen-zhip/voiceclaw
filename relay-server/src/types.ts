@@ -16,13 +16,15 @@ export type ClientEvent =
   | MintTokenEvent
   | ToolExecEvent
   | SessionPrepEvent
+  | ThinkingDeleteEvent
+  | ThinkingWipeEvent
 
 // One-shot auth handshake used by the direct-to-provider path. Sending a
 // session.config with a valid apiKey is the alternate path (it also flips the
 // authed flag). The relay closes the socket on any privileged message that
 // arrives before either has succeeded.
 export interface SessionAuthEvent {
-  type: "session.auth"
+  type: 'session.auth'
   apiKey: string
   // Optional self-reported device name (e.g. `Device.deviceName` or
   // `Device.modelName` from expo-device). The relay forwards this to
@@ -32,11 +34,11 @@ export interface SessionAuthEvent {
 }
 
 export interface SessionConfigEvent {
-  type: "session.config"
-  provider: "openai" | "gemini" | "xai"
+  type: 'session.config'
+  provider: 'openai' | 'gemini' | 'xai'
   voice: string
   model?: string
-  brainAgent: "enabled" | "none"
+  brainAgent: 'enabled' | 'none'
   apiKey: string
   // Tavily API key for the web_search tool. When present (either here or via
   // TAVILY_API_KEY env on the relay), web_search is registered as a tool the
@@ -52,9 +54,14 @@ export interface SessionConfigEvent {
     deviceModel?: string
     location?: string
   }
-  watchdog?: "enabled" | "disabled"
+  watchdog?: 'enabled' | 'disabled'
   instructionsOverride?: string
-  conversationHistory?: { role: "user" | "assistant", text: string, timestamp?: number, relativeMs?: number }[]
+  conversationHistory?: {
+    role: 'user' | 'assistant'
+    text: string
+    timestamp?: number
+    relativeMs?: number
+  }[]
   // Historical flag — direct tools (read/write/edit/bash) are now always
   // advertised; this field is accepted for wire-compat but no longer gates
   // anything. Kept so older clients can still send it without error.
@@ -79,46 +86,110 @@ export interface SessionConfigEvent {
   // See SessionAuthEvent.deviceName — accepted on session.config too so
   // clients that skip the auth handshake still get auto-identified.
   deviceName?: string
+  // Which pipeline shape backs the session. "s2s" (default) keeps the existing
+  // single-provider speech-to-speech path; "stt-tts" composes STT → Harness →
+  // TTS. Absent field means s2s, so older clients are unaffected.
+  mode?: SessionMode
+  sttProvider?: string
+  ttsProvider?: string
+  harness?: string
+  sttConfig?: STTWireConfig
+  ttsConfig?: TTSWireConfig
+  harnessConfig?: HarnessWireConfig
+  // Which output streams the client wants. Thinking is never included — it is
+  // debug-only and stays server-side.
+  outputPreference?: OutputPreference
 }
 
-export type VoiceMode = "direct" | "operator" | "supervisor"
-export const DEFAULT_VOICE_MODE: VoiceMode = "direct"
-export const VOICE_MODES: readonly VoiceMode[] = ["direct", "operator", "supervisor"]
+export type SessionMode = 's2s' | 'stt-tts'
+export const DEFAULT_SESSION_MODE: SessionMode = 's2s'
+export const SESSION_MODES: readonly SessionMode[] = ['s2s', 'stt-tts']
 
-export type AgentBackend = "pi" | "openai" | "hermes"
-export const DEFAULT_AGENT_BACKEND: AgentBackend = "pi"
-export const AGENT_BACKENDS: readonly AgentBackend[] = ["pi", "openai", "hermes"]
+export function resolveSessionMode(value: unknown): SessionMode {
+  if (value === 'stt-tts' || value === 's2s') return value
+  return DEFAULT_SESSION_MODE
+}
+
+export type OutputPreference = 'speech' | 'text' | 'both'
+export const DEFAULT_OUTPUT_PREFERENCE: OutputPreference = 'both'
+
+export function resolveOutputPreference(value: unknown): OutputPreference {
+  if (value === 'speech' || value === 'text' || value === 'both') return value
+  return DEFAULT_OUTPUT_PREFERENCE
+}
+
+// Wire-level STT/TTS config. Kept separate from the internal STTConfig/TTSConfig
+// so provider-only fields never have to be accepted from a client.
+export interface STTWireConfig {
+  apiKey?: string
+  model?: string
+  language?: string
+  sampleRate?: number
+  endpointingMs?: number
+}
+
+export interface TTSWireConfig {
+  apiKey?: string
+  voice?: string
+  model?: string
+  sampleRate?: number
+  speed?: number
+  sentenceBatchSize?: number
+}
+
+export interface ThinkingDeleteEvent {
+  type: 'thinking.delete'
+  sessionId: string
+}
+
+export interface ThinkingWipeEvent {
+  type: 'thinking.wipe'
+}
+
+export interface HarnessWireConfig {
+  gatewayUrl?: string
+  authToken?: string
+  timeoutMs?: number
+}
+
+export type VoiceMode = 'direct' | 'operator' | 'supervisor'
+export const DEFAULT_VOICE_MODE: VoiceMode = 'direct'
+export const VOICE_MODES: readonly VoiceMode[] = ['direct', 'operator', 'supervisor']
+
+export type AgentBackend = 'pi' | 'openai' | 'hermes'
+export const DEFAULT_AGENT_BACKEND: AgentBackend = 'pi'
+export const AGENT_BACKENDS: readonly AgentBackend[] = ['pi', 'openai', 'hermes']
 
 export function resolveVoiceMode(value: unknown): VoiceMode {
-  if (value === "operator" || value === "supervisor" || value === "direct") {
+  if (value === 'operator' || value === 'supervisor' || value === 'direct') {
     return value
   }
   return DEFAULT_VOICE_MODE
 }
 
 export function resolveAgentBackend(value: unknown): AgentBackend {
-  if (value === "pi" || value === "openai" || value === "hermes") {
+  if (value === 'pi' || value === 'openai' || value === 'hermes') {
     return value
   }
   return DEFAULT_AGENT_BACKEND
 }
 
 export interface AudioAppendEvent {
-  type: "audio.append"
+  type: 'audio.append'
   data: string // base64 PCM16
 }
 
 export interface AudioAppendCaptureOnlyEvent {
-  type: "audio.append_capture_only"
+  type: 'audio.append_capture_only'
   data: string // base64 PCM16, local recording only; never forwarded upstream
 }
 
 export interface AudioCommitEvent {
-  type: "audio.commit"
+  type: 'audio.commit'
 }
 
 export interface FrameAppendEvent {
-  type: "frame.append"
+  type: 'frame.append'
   data: string // base64 JPEG — composite when annotated, raw capture otherwise
   mimeType?: string // default "image/jpeg"
   // Sibling artifacts captured alongside the composite when on-screen drawing
@@ -131,15 +202,15 @@ export interface FrameAppendEvent {
 }
 
 export interface ResponseCreateEvent {
-  type: "response.create"
+  type: 'response.create'
 }
 
 export interface ResponseCancelEvent {
-  type: "response.cancel"
+  type: 'response.cancel'
 }
 
 export interface ToolResultEvent {
-  type: "tool.result"
+  type: 'tool.result'
   callId: string
   output: string
 }
@@ -149,7 +220,7 @@ export interface ToolResultEvent {
 // via injectContext, which on both Gemini and OpenAI triggers a model response
 // that streams back as transcript.delta / transcript.done (role=assistant).
 export interface TextInputEvent {
-  type: "text.input"
+  type: 'text.input'
   text: string
 }
 
@@ -159,7 +230,7 @@ export interface TextInputEvent {
 // turnId is issued by the relay in TurnStartedEvent; echoing it back avoids
 // attributing a late-arriving timing to the wrong turn.
 export interface ClientTimingEvent {
-  type: "client.timing"
+  type: 'client.timing'
   phase: string
   ms: number
   turnId?: string
@@ -192,35 +263,73 @@ export type RelayEvent =
   | SessionPrepResultEvent
   | SessionPrepErrorEvent
   | SessionAuthOkEvent
+  | ThinkingSavedEvent
+  | TextSectionEvent
+  | ScreenHighlightEvent
+
+// STT/TTS Harness: thinking chain was persisted for this turn. Carries paths only,
+// never the reasoning itself — clients may show a debug affordance but must not
+// display thinking content.
+export interface ThinkingSavedEvent {
+  type: 'thinking.saved'
+  turnId?: string
+  localPath: string
+  tracePath?: string
+}
+
+// Detailed screen-side content for a turn, separate from the spoken summary.
+// Emitted only when the Harness produced a text stream and the client asked
+// for text output.
+export interface TextSectionEvent {
+  type: 'text.section'
+  turnId?: string
+  sectionId: string
+  title?: string
+  content: string
+  format?: 'markdown' | 'plain' | 'code'
+  language?: string
+}
+
+// "Look at this" cue — fired as speech playback reaches a screen reference so
+// the client can scroll to or highlight the matching text section.
+export interface ScreenHighlightEvent {
+  type: 'screen.highlight'
+  turnId?: string
+  target: string
+  mode: 'look' | 'highlight'
+}
 
 export interface SessionAuthOkEvent {
-  type: "session.auth.ok"
+  type: 'session.auth.ok'
 }
 
 export interface SessionReadyEvent {
-  type: "session.ready"
+  type: 'session.ready'
   sessionId: string
 }
 
 export interface AudioDeltaEvent {
-  type: "audio.delta"
+  type: 'audio.delta'
   data: string // base64 PCM16
 }
 
 export interface TranscriptDeltaEvent {
-  type: "transcript.delta"
+  type: 'transcript.delta'
   text: string
-  role: "user" | "assistant"
+  role: 'user' | 'assistant'
+  source?: 'speech' | 'text'
+  format?: 'markdown' | 'plain' | 'code'
+  language?: string
 }
 
 export interface TranscriptDoneEvent {
-  type: "transcript.done"
+  type: 'transcript.done'
   text: string
-  role: "user" | "assistant"
+  role: 'user' | 'assistant'
 }
 
 export interface ToolCallEvent {
-  type: "tool.call"
+  type: 'tool.call'
   callId: string
   name: string
   arguments: string
@@ -231,7 +340,7 @@ export interface ToolCallEvent {
 // result is the raw string payload returned by the tool (JSON or plain text,
 // keep ≤ 4 KB — strip audio/embedding fields before sending).
 export interface ToolCallCompletedEvent {
-  type: "tool_call.completed"
+  type: 'tool_call.completed'
   callId: string
   name: string
   durationMs: number
@@ -241,7 +350,7 @@ export interface ToolCallCompletedEvent {
 // Emitted when a server-side tool call finishes with an error or is cancelled.
 // cancelled=true distinguishes a mid-turn barge-in abort from an actual failure.
 export interface ToolCallFailedEvent {
-  type: "tool_call.failed"
+  type: 'tool_call.failed'
   callId: string
   name: string
   durationMs: number
@@ -250,7 +359,7 @@ export interface ToolCallFailedEvent {
 }
 
 export interface ToolProgressEvent {
-  type: "tool.progress"
+  type: 'tool.progress'
   callId: string
   summary?: string
   step?: string
@@ -258,27 +367,27 @@ export interface ToolProgressEvent {
 }
 
 export interface TurnStartedEvent {
-  type: "turn.started"
+  type: 'turn.started'
   turnId?: string
 }
 
 export interface TurnEndedEvent {
-  type: "turn.ended"
+  type: 'turn.ended'
 }
 
 export interface SessionEndedEvent {
-  type: "session.ended"
+  type: 'session.ended'
   summary: string
   durationSec: number
   turnCount: number
 }
 
 export interface SessionRotatingEvent {
-  type: "session.rotating"
+  type: 'session.rotating'
 }
 
 export interface SessionRotatedEvent {
-  type: "session.rotated"
+  type: 'session.rotated'
   sessionId: string
 }
 
@@ -286,7 +395,7 @@ export interface SessionRotatedEvent {
 // by the tracer to attribute cost on Langfuse generations; not forwarded to
 // the mobile client.
 export interface UsageMetricsEvent {
-  type: "usage.metrics"
+  type: 'usage.metrics'
   promptTokens?: number
   completionTokens?: number
   totalTokens?: number
@@ -300,7 +409,7 @@ export interface UsageMetricsEvent {
 // namespace; not forwarded to the mobile client. Boundaries and source-kind
 // semantics documented on TurnTracer.attachLatency.
 export interface LatencyMetricsEvent {
-  type: "latency.metrics"
+  type: 'latency.metrics'
   // End-of-speech signal → first model audio byte. Covers the provider's VAD
   // endpointing wait plus model TTFT. What the user perceives as "how fast did
   // it reply". Adapters should not emit this when the turn was interrupted or
@@ -335,7 +444,7 @@ export interface LatencyMetricsEvent {
 // the event to the client so it can update UI (drop speculative prefixes,
 // clear spinners, etc.).
 export interface ToolCancelledEvent {
-  type: "tool.cancelled"
+  type: 'tool.cancelled'
   callIds: string[]
 }
 
@@ -345,7 +454,7 @@ export interface ToolCancelledEvent {
 // response survives provider drops mid-injection and isn't degraded to the
 // model's spoken paraphrase across cross-session loads.
 export interface BrainResultEvent {
-  type: "brain.result"
+  type: 'brain.result'
   callId: string
   query: string
   result?: string
@@ -353,7 +462,7 @@ export interface BrainResultEvent {
 }
 
 export interface ErrorEvent {
-  type: "error"
+  type: 'error'
   message: string
   code: number
   userMessage?: string
@@ -369,14 +478,14 @@ export interface ErrorEvent {
 // on the same /ws route and do NOT require session.config.
 
 export interface MintTokenEvent {
-  type: "mint_token"
-  provider: "gemini" | "openai" | "xai"
+  type: 'mint_token'
+  provider: 'gemini' | 'openai' | 'xai'
   model?: string
 }
 
 export interface TokenEvent {
-  type: "token"
-  provider: "gemini"
+  type: 'token'
+  provider: 'gemini'
   token: string
   // Wall-clock ms epoch at which the token stops being usable to start new
   // sessions. Clients should refresh before this.
@@ -390,15 +499,15 @@ export interface TokenEvent {
 }
 
 export interface TokenErrorEvent {
-  type: "token.error"
-  provider: "gemini" | "openai" | "xai"
+  type: 'token.error'
+  provider: 'gemini' | 'openai' | 'xai'
   message: string
 }
 
 export interface ToolExecEvent {
-  type: "tool.exec"
+  type: 'tool.exec'
   callId: string
-  name: "read" | "write" | "edit" | "bash"
+  name: 'read' | 'write' | 'edit' | 'bash'
   // JSON-encoded argument object — same shape the in-session direct tools
   // accept (read: {path, offset?, limit?}; write: {path, content};
   // edit: {path, old_string, new_string, replace_all?};
@@ -407,7 +516,7 @@ export interface ToolExecEvent {
 }
 
 export interface StandaloneToolResultEvent {
-  type: "tool.result"
+  type: 'tool.result'
   callId: string
   name: string
   result: string
@@ -415,7 +524,7 @@ export interface StandaloneToolResultEvent {
 }
 
 export interface StandaloneToolErrorEvent {
-  type: "tool.error"
+  type: 'tool.error'
   callId: string
   name: string
   error: string
@@ -430,7 +539,7 @@ export interface StandaloneToolErrorEvent {
 // session.config; the relay replies with the built instructions string and the
 // Gemini-shaped tool declarations to splice into the upstream setup message.
 export interface SessionPrepEvent {
-  type: "session.prep"
+  type: 'session.prep'
   config: SessionConfigEvent
 }
 
@@ -441,12 +550,12 @@ interface GeminiFunctionDeclaration {
 }
 
 export interface SessionPrepResultEvent {
-  type: "session.prep.result"
+  type: 'session.prep.result'
   instructions: string
   tools: GeminiFunctionDeclaration[]
 }
 
 export interface SessionPrepErrorEvent {
-  type: "session.prep.error"
+  type: 'session.prep.error'
   message: string
 }

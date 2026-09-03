@@ -13,13 +13,26 @@
 // All methods no-op when Langfuse is not initialized, so callers don't
 // need to guard every site.
 
-import { randomUUID } from "node:crypto"
-import { context, trace, type Context } from "@opentelemetry/api"
-import { propagateAttributes, startObservation, type LangfuseGeneration, type LangfuseSpan, type LangfuseTool } from "@langfuse/tracing"
-import { isLangfuseEnabled } from "./langfuse.js"
-import type { HistoryMessage } from "../history.js"
+import { randomUUID } from 'node:crypto'
+import { context, trace, type Context } from '@opentelemetry/api'
+import {
+  propagateAttributes,
+  startObservation,
+  type LangfuseGeneration,
+  type LangfuseSpan,
+  type LangfuseTool,
+} from '@langfuse/tracing'
+import { isLangfuseEnabled } from './langfuse.js'
+import type { HistoryMessage } from '../history.js'
+import type { ScreenReference, ThinkingContent } from '../harness-adapter/types.js'
 
-export type ChatMessage = { role: "system" | "user" | "assistant", content: string }
+export type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string }
+
+interface ThinkingTraceCredentialSource {
+  apiKey?: string
+  authToken?: string
+  token?: string
+}
 
 // How long to keep the generation object around after endTurn() so trailing
 // usage.metrics / client.timing events from the same turn can still attach.
@@ -57,7 +70,10 @@ export class TurnTracer {
   // stamp attrs on the OTel span before it closes. Keyed by turnId because
   // multiple turns can be in this "draining" state concurrently when media
   // finalize (fs writes) takes longer than the gap to the next turn.
-  private pendingEnds = new Map<string, { generation: LangfuseGeneration, timer: ReturnType<typeof setTimeout> }>()
+  private pendingEnds = new Map<
+    string,
+    { generation: LangfuseGeneration; timer: ReturnType<typeof setTimeout> }
+  >()
   // Monotonic per-session counter so a Langfuse session's traces sort
   // chronologically at a glance even without timestamp math.
   private turnIndex = 0
@@ -72,8 +88,8 @@ export class TurnTracer {
     turnStartedAt: string
   } | null = null
 
-  private currentUserText = ""
-  private currentAssistantText = ""
+  private currentUserText = ''
+  private currentAssistantText = ''
 
   getActiveTurnId(): string | null {
     return this.activeTurnId
@@ -95,7 +111,7 @@ export class TurnTracer {
     sessionId: string,
     userId: string | null,
     model: string | null,
-    instructions: string | null = null,
+    instructions: string | null = null
   ) {
     this.sessionId = sessionId
     this.userId = userId
@@ -114,7 +130,7 @@ export class TurnTracer {
     this.resumeHistory = history.length > 0 ? [...history] : []
   }
 
-  startTurn() {
+  startTurn(turnId?: string) {
     if (!isLangfuseEnabled()) return
     // Close any leftover generation (defensive — shouldn't happen if turn.ended fires).
     // Do NOT flush recently-ended turns here: each pendingEnd entry owns its own
@@ -123,9 +139,9 @@ export class TurnTracer {
     // turn.started).
     this.endTurn()
 
-    this.currentUserText = ""
-    this.currentAssistantText = ""
-    this.activeTurnId = randomUUID()
+    this.currentUserText = ''
+    this.currentAssistantText = ''
+    this.activeTurnId = turnId ?? randomUUID()
     this.turnIndex += 1
     // Intentionally defer startObservation until the first real event arrives.
     this.pendingTurn = {
@@ -135,6 +151,19 @@ export class TurnTracer {
     }
   }
 
+  getTracePath(turnId?: string): string | undefined {
+    const target = this.resolveTarget(turnId)
+    if (!target || !process.env.LANGFUSE_PUBLIC_KEY || !process.env.LANGFUSE_SECRET_KEY) {
+      return undefined
+    }
+    const traceId = target.otelSpan.spanContext().traceId
+    const baseUrl = (process.env.LANGFUSE_BASE_URL ?? 'https://cloud.langfuse.com').replace(
+      /\/$/,
+      ''
+    )
+    return `${baseUrl}/trace/${traceId}`
+  }
+
   private ensureActiveGeneration() {
     if (this.activeGeneration || !this.pendingTurn) return
     const pending = this.pendingTurn
@@ -142,7 +171,7 @@ export class TurnTracer {
     const metadata: Record<string, unknown> = {
       turnId: pending.turnId,
       turnIndex: pending.turnIndex,
-      "client.turnStartedAt": pending.turnStartedAt,
+      'client.turnStartedAt': pending.turnStartedAt,
     }
     // propagateAttributes writes sessionId/userId onto the OTel context so the
     // span created inside the callback (and its children) inherit them. Setting
@@ -156,14 +185,14 @@ export class TurnTracer {
       },
       () => {
         this.activeGeneration = startObservation(
-          "voice-turn",
+          'voice-turn',
           {
             model: this.model ?? undefined,
             metadata,
           },
-          { asType: "generation" },
+          { asType: 'generation' }
         )
-      },
+      }
     )
   }
 
@@ -191,7 +220,7 @@ export class TurnTracer {
         input: safeParse(args),
         metadata: { callId },
       },
-      { asType: "tool" },
+      { asType: 'tool' }
     )
     this.activeToolSpans.set(callId, span)
   }
@@ -201,7 +230,7 @@ export class TurnTracer {
     if (!span) return
     span.update({
       output: safeParse(output),
-      ...(error ? { level: "ERROR" as const, statusMessage: error } : {}),
+      ...(error ? { level: 'ERROR' as const, statusMessage: error } : {}),
     })
     span.end()
     this.activeToolSpans.delete(callId)
@@ -226,8 +255,8 @@ export class TurnTracer {
   // on this trace and the whole thing groups under the call in Sessions view.
   startBackgroundObservation(
     name: string,
-    opts?: { input?: unknown },
-  ): { ctx: Context, end: (params?: { output?: unknown, error?: string }) => void } {
+    opts?: { input?: unknown }
+  ): { ctx: Context; end: (params?: { output?: unknown; error?: string }) => void } {
     if (!isLangfuseEnabled()) {
       return { ctx: context.active(), end: () => {} }
     }
@@ -241,7 +270,7 @@ export class TurnTracer {
         span = startObservation(name, {
           ...(opts?.input !== undefined ? { input: opts.input } : {}),
         })
-      },
+      }
     )
     if (!span) {
       return { ctx: context.active(), end: () => {} }
@@ -254,9 +283,7 @@ export class TurnTracer {
         if (params?.output !== undefined || params?.error) {
           openedSpan.update({
             ...(params?.output !== undefined ? { output: params.output } : {}),
-            ...(params?.error
-              ? { level: "ERROR" as const, statusMessage: params.error }
-              : {}),
+            ...(params?.error ? { level: 'ERROR' as const, statusMessage: params.error } : {}),
           })
         }
         openedSpan.end()
@@ -268,6 +295,48 @@ export class TurnTracer {
     const target = this.resolveTarget(turnId)
     if (!target) return
     target.update({ metadata: { [`client.${phase}_ms`]: ms } })
+  }
+
+  attachThinking(
+    thinking: ThinkingContent,
+    turnId?: string,
+    credentialSources: ReadonlyArray<ThinkingTraceCredentialSource | undefined> = []
+  ) {
+    const target = this.resolveTarget(turnId)
+    if (!target) return
+    const metadata: Record<string, unknown> = {
+      'thinking.present': true,
+      'thinking.size_bytes': Buffer.byteLength(JSON.stringify(thinking), 'utf8'),
+      'thinking.classification': 'private',
+      'thinking.capture_enabled': process.env.VOICECLAW_THINKING_CAPTURE === 'enabled',
+    }
+    if (
+      process.env.VOICECLAW_THINKING_CAPTURE === 'enabled' &&
+      process.env.VOICECLAW_TRACE_CONTENT === 'enabled'
+    ) {
+      const secrets = credentialSources
+        .flatMap((source) => [source?.apiKey, source?.authToken, source?.token])
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+        .sort((left, right) => right.length - left.length)
+      const redact = (value: string) =>
+        secrets.reduce((redacted, secret) => redacted.replaceAll(secret, '[REDACTED]'), value)
+      metadata['thinking.steps'] = thinking.steps.map(redact)
+      metadata['thinking.reasoning'] = redact(thinking.reasoning)
+      if (thinking.confidence !== undefined) {
+        metadata['thinking.confidence'] = thinking.confidence
+      }
+    }
+    target.update({
+      metadata,
+    })
+  }
+
+  attachScreenReferences(references: ScreenReference[], turnId?: string) {
+    const target = this.resolveTarget(turnId)
+    if (!target) return
+    target.update({
+      metadata: { 'screen.references': JSON.stringify(references) },
+    })
   }
 
   // Attach adapter-measured latency samples to the voice-turn span as raw OTel
@@ -295,50 +364,62 @@ export class TurnTracer {
   //       any remaining VAD wait + initial generation).
   //   first_audio_from_turn_start_ms — turn.started → first model audio byte.
   //       TTFT-like, measured from the turn boundary we already stamp.
-  attachLatency(metrics: {
-    endpointMs?: number
-    endpointSource?: string
-    providerFirstByteMs?: number
-    firstAudioFromTurnStartMs?: number
-    firstTextFromTurnStartMs?: number
-    firstOutputFromTurnStartMs?: number
-    firstOutputModality?: string
-  }, turnId?: string) {
+  attachLatency(
+    metrics: {
+      endpointMs?: number
+      endpointSource?: string
+      providerFirstByteMs?: number
+      firstAudioFromTurnStartMs?: number
+      firstTextFromTurnStartMs?: number
+      firstOutputFromTurnStartMs?: number
+      firstOutputModality?: string
+    },
+    turnId?: string
+  ) {
     const target = this.resolveTarget(turnId) ?? this.resolveUsageTarget(turnId)
     if (!target) return
     const attrs: Record<string, string | number> = {}
     if (isNonNegativeFinite(metrics.endpointMs)) {
-      attrs["voice.latency.endpoint_ms"] = Math.round(metrics.endpointMs)
+      attrs['voice.latency.endpoint_ms'] = Math.round(metrics.endpointMs)
     }
     if (metrics.endpointSource) {
-      attrs["voice.latency.endpoint.source"] = metrics.endpointSource
+      attrs['voice.latency.endpoint.source'] = metrics.endpointSource
     }
     if (isNonNegativeFinite(metrics.providerFirstByteMs)) {
-      attrs["voice.latency.provider_first_byte_ms"] = Math.round(metrics.providerFirstByteMs)
+      attrs['voice.latency.provider_first_byte_ms'] = Math.round(metrics.providerFirstByteMs)
     }
     if (isNonNegativeFinite(metrics.firstAudioFromTurnStartMs)) {
-      attrs["voice.latency.first_audio_from_turn_start_ms"] = Math.round(metrics.firstAudioFromTurnStartMs)
+      attrs['voice.latency.first_audio_from_turn_start_ms'] = Math.round(
+        metrics.firstAudioFromTurnStartMs
+      )
     }
     if (isNonNegativeFinite(metrics.firstTextFromTurnStartMs)) {
-      attrs["voice.latency.first_text_from_turn_start_ms"] = Math.round(metrics.firstTextFromTurnStartMs)
+      attrs['voice.latency.first_text_from_turn_start_ms'] = Math.round(
+        metrics.firstTextFromTurnStartMs
+      )
     }
     if (isNonNegativeFinite(metrics.firstOutputFromTurnStartMs)) {
-      attrs["voice.latency.first_output_from_turn_start_ms"] = Math.round(metrics.firstOutputFromTurnStartMs)
+      attrs['voice.latency.first_output_from_turn_start_ms'] = Math.round(
+        metrics.firstOutputFromTurnStartMs
+      )
     }
     if (metrics.firstOutputModality) {
-      attrs["voice.latency.first_output.modality"] = metrics.firstOutputModality
+      attrs['voice.latency.first_output.modality'] = metrics.firstOutputModality
     }
     if (Object.keys(attrs).length === 0) return
     target.otelSpan.setAttributes(attrs)
   }
 
-  attachUsage(usage: {
-    promptTokens?: number
-    completionTokens?: number
-    totalTokens?: number
-    inputAudioTokens?: number
-    outputAudioTokens?: number
-  }, turnId?: string) {
+  attachUsage(
+    usage: {
+      promptTokens?: number
+      completionTokens?: number
+      totalTokens?: number
+      inputAudioTokens?: number
+      outputAudioTokens?: number
+    },
+    turnId?: string
+  ) {
     // Providers emit usage for the turn that just finished, not the one in
     // progress. Prefer pendingEnd so a late usageMetadata arriving after the
     // next turn has already started still lands on the correct generation
@@ -368,7 +449,7 @@ export class TurnTracer {
     if (!target) return
     const otelAttrs: Record<string, string | number | boolean> = {}
     for (const [k, v] of Object.entries(attrs)) {
-      if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+      if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
         otelAttrs[k] = v
       }
     }
@@ -394,24 +475,23 @@ export class TurnTracer {
       this.sessionInstructions,
       this.sessionPreamble,
       this.resumeHistory,
-      this.currentUserText,
+      this.currentUserText
     )
-    const inputForSpan =
-      chatInput.length > 0 ? chatInput : this.currentUserText || undefined
+    const inputForSpan = chatInput.length > 0 ? chatInput : this.currentUserText || undefined
     // Tool spans may legitimately outlive the turn they started in — async tools
     // (e.g. ask_brain) often resolve on a later turn. Leave them open; endSession
     // will WARNING-close anything still dangling when the socket closes.
     this.activeGeneration.update({
       input: inputForSpan,
       output: this.currentAssistantText || undefined,
-      ...(errorMessage ? { level: "ERROR" as const, statusMessage: errorMessage } : {}),
+      ...(errorMessage ? { level: 'ERROR' as const, statusMessage: errorMessage } : {}),
     })
     // Keep the generation around briefly so trailing usage.metrics /
     // client.timing / media finalize can still attach before we call .end()
     // and hand the span off to the exporter. Each entry gets its own timer so
     // the next turn starting doesn't nuke this one's draining window.
     const generation = this.activeGeneration
-    const turnId = this.activeTurnId ?? ""
+    const turnId = this.activeTurnId ?? ''
     if (turnId) {
       const timer = setTimeout(() => this.flushPending(turnId), PENDING_FLUSH_MS)
       this.pendingEnds.set(turnId, { generation, timer })
@@ -428,7 +508,7 @@ export class TurnTracer {
       this.flushPending(turnId)
     }
     for (const [callId, span] of this.activeToolSpans) {
-      span.update({ level: "WARNING", statusMessage: "tool span closed without result" })
+      span.update({ level: 'WARNING', statusMessage: 'tool span closed without result' })
       span.end()
       this.activeToolSpans.delete(callId)
     }
@@ -479,20 +559,20 @@ export function composeTurnInput(
   baseInstructions: string | null,
   sessionPreamble: string | null,
   resumeHistory: HistoryMessage[],
-  currentUserText: string,
+  currentUserText: string
 ): ChatMessage[] {
   const chat: ChatMessage[] = []
   const systemContent = [baseInstructions, sessionPreamble]
     .filter((s): s is string => !!s && s.length > 0)
-    .join("\n\n")
+    .join('\n\n')
   if (systemContent.length > 0) {
-    chat.push({ role: "system", content: systemContent })
+    chat.push({ role: 'system', content: systemContent })
   }
   for (const turn of resumeHistory) {
     if (turn.text) chat.push({ role: turn.role, content: turn.text })
   }
   if (currentUserText) {
-    chat.push({ role: "user", content: currentUserText })
+    chat.push({ role: 'user', content: currentUserText })
   }
   return chat
 }
@@ -506,7 +586,7 @@ function safeParse(s: string): unknown {
 }
 
 function isNonNegativeFinite(v: number | undefined): v is number {
-  return typeof v === "number" && Number.isFinite(v) && v >= 0
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0
 }
 
 export function usageToOtelAttrs(usage: {
@@ -516,9 +596,11 @@ export function usageToOtelAttrs(usage: {
   outputAudioTokens?: number
 }): Record<string, number> {
   const attrs: Record<string, number> = {}
-  if (usage.promptTokens != null) attrs["gen_ai.usage.input_tokens"] = usage.promptTokens
-  if (usage.completionTokens != null) attrs["gen_ai.usage.output_tokens"] = usage.completionTokens
-  if (usage.inputAudioTokens != null) attrs["gen_ai.usage.input_audio_tokens"] = usage.inputAudioTokens
-  if (usage.outputAudioTokens != null) attrs["gen_ai.usage.output_audio_tokens"] = usage.outputAudioTokens
+  if (usage.promptTokens != null) attrs['gen_ai.usage.input_tokens'] = usage.promptTokens
+  if (usage.completionTokens != null) attrs['gen_ai.usage.output_tokens'] = usage.completionTokens
+  if (usage.inputAudioTokens != null)
+    attrs['gen_ai.usage.input_audio_tokens'] = usage.inputAudioTokens
+  if (usage.outputAudioTokens != null)
+    attrs['gen_ai.usage.output_audio_tokens'] = usage.outputAudioTokens
   return attrs
 }
