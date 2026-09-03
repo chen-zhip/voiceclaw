@@ -41,6 +41,10 @@ desktop/dist-staging/
 # Dev logs
 logs/
 
+# OpenSpec planning data is local; the workflow contract is shared.
+openspec/*
+!openspec/config.yaml
+
 # Inter-agent ephemeral handoffs (research → implementer in same session).
 # Per repo convention, agent-produced design notes / recon outputs that the
 # next agent needs to read live here, NOT as committed docs. See memory
@@ -48,3 +52,11 @@ logs/
 .scratch/
 .agent-grid/
 .antigravitycli/
+
+# Local AI assistant configuration. The one shared command remains tracked.
+.agents/
+.trae/
+.claude/*
+!.claude/commands/
+.claude/commands/*
+!.claude/commands/deploy-mobile.md
