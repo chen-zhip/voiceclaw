@@ -2,7 +2,7 @@
 
 See `proposal.md`, `specs/harness-execution/routing/spec.md`, and the modified `voice/stt-tts-mode` delta. The archived `add-stt-tts-mode` change is a tested scaffold, not proof of a Client entry or real Harness execution. ADR-0010 assigns deterministic provider-neutral acceptance here and real app-server acceptance to the downstream Codex change, removing the former dependency loop.
 
-Fixed comparison point for final code review: `c9e8ca15d55cd9b2a58189333ef7d2d2273776a2`.
+Fixed comparison point for final code review: `1f855d75fd58efc9a05cab12014473f1969d5b87`.
 
 ## Goals / Non-Goals
 

@@ -2,7 +2,7 @@
 
 See `proposal.md` and `specs/plugin/kernel-phase-zero/spec.md`. ADR-0009 fixes the long-term plugin model and trusted boundary; ADR-0010 fixes the prototype-first order and assigns deterministic provider-neutral acceptance to Routing and real Provider acceptance to Codex. The repository has a tested Relay-side STT/TTS scaffold but no shared package contract, Desktop Contribution host, cross-runtime Capability invocation, or real Provider package.
 
-Fixed comparison point for final code review: `c9e8ca15d55cd9b2a58189333ef7d2d2273776a2`.
+Fixed comparison point for final code review: `1f855d75fd58efc9a05cab12014473f1969d5b87`.
 
 ## Goals / Non-Goals
 

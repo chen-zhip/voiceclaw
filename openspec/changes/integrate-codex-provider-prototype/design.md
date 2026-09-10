@@ -2,7 +2,7 @@
 
 See `proposal.md` and `specs/harness-provider/codex-prototype/spec.md`. Kernel Phase 0, Desktop Host Contract, and Routing are strict upstream dependencies. Routing completes against a deterministic provider-neutral fixture; this change alone must prove a real Codex app-server and physical microphone path.
 
-The installed planning baseline was verified as `codex-cli 0.153.4`. Fixed comparison point for final code review: `c9e8ca15d55cd9b2a58189333ef7d2d2273776a2`.
+The installed planning baseline was verified as `codex-cli 0.153.4`. Fixed comparison point for final code review: `1f855d75fd58efc9a05cab12014473f1969d5b87`.
 
 ## Goals / Non-Goals
 

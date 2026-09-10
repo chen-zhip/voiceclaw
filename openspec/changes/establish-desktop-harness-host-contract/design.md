@@ -2,7 +2,7 @@
 
 See `proposal.md` and `specs/desktop-host/harness-contract/spec.md`. The Desktop App already supervises a bundled Relay, while Harness executables, Workspace paths, and credentials are machine-local. This design consumes Kernel Phase 0 and excludes Archive and Memory.
 
-Fixed comparison point for final code review: `c9e8ca15d55cd9b2a58189333ef7d2d2273776a2`.
+Fixed comparison point for final code review: `1f855d75fd58efc9a05cab12014473f1969d5b87`.
 
 ## Goals / Non-Goals
 
