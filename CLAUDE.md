@@ -43,4 +43,6 @@ Issues live as markdown files under `.scratch/<feature>/` in this repo. See `doc
 
 ## Domain docs
 
-Multi-context — a root `CONTEXT-MAP.md` pointing to one `CONTEXT.md` per workspace, plus `docs/adr/` at the root. See `docs/agents/domain.md`.
+Terminology — before creating, renaming, or defining any domain term, read and apply `docs/agents/domain.md`, then capture a resolved project-specific term in the relevant `CONTEXT.md`.
+
+Multi-context — a root `CONTEXT-MAP.md` points to one `CONTEXT.md` per workspace, with system-wide decisions under `docs/adr/`.

@@ -9,8 +9,8 @@ The VoiceClaw app installed on a phone, with an interactive conversation experie
 _Avoid_: Thin desktop view, Relay host
 
 **Client Projection**:
-A disposable local cache of the Conversation Archive used for display and read-only offline access.
-_Avoid_: Conversation authority, independent history
+A disposable local cache of Relay-derived Conversation Archive data used for display and read-only offline access. Local drafts and outbox entries remain separate until Relay accepts them.
+_Avoid_: Conversation authority, independent history, local outbox
 
 **Paired Relay**:
 The authenticated Relay selected by a Mobile Client as its conversation control plane.

@@ -8,7 +8,7 @@ Claude Code 和 Codex 都只有局部动态能力发现，无法用一个通用�
 
 ## Decision
 
-每个 Integration Plugin 用版本化、硬编码的 Capability Profile 作为唯一能力定义。未知 Harness 版本使用最近的已知画像并持续警告；原生动态信息只描述 Provider Availability 和运行时资源，不改变画像。
+每个 VoiceClaw Integration Plugin（即 `provider-integration` Contribution）用版本化、硬编码的 Capability Profile 作为唯一 Provider 行为定义。未知 Harness 版本使用最近的已知画像并持续警告；原生动态信息只描述 Provider Availability 和运行时资源，不改变画像。Capability Profile 不等同于 Feature Plugin 的 Capability Contract。
 
 ## Consequences
 

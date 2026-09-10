@@ -9,9 +9,11 @@
 [![Grok Voice](https://img.shields.io/badge/Grok-Voice_API-000000)]()
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](relay-server/Dockerfile)
 
-Open-source voice AI assistant. Talk to any AI model in real time from your phone or desktop.
+Open-source, Harness-neutral framework for composable Agent interaction and capabilities across devices.
 
-VoiceClaw is a **thin voice layer on top of your existing AI agent**. Already have an agent that can search the web, manage your calendar, or access your tools? VoiceClaw gives it a voice -- connect any OpenAI-compatible agent and talk to it naturally through your phone or desktop.
+VoiceClaw's long-term architecture combines Relay, Desktop Host, Clients, and multiple Harnesses through a trusted Kernel. Voice interaction and official Feature Plugins provide the default experience, while developers can extend or replace data, model, tool, automation, and UI capabilities. Codex, Claude Code, DeepSeek Harness, and other Harnesses remain peer integrations; VoiceClaw is not a downstream distribution of any one Harness.
+
+The current implementation is still primarily a **thin voice layer on top of an existing AI agent**. The Feature Plugin Kernel, official Archive/Memory plugins, and production Harness integrations are planned architecture and must not be read as already shipped behavior.
 
 ## Demo
 
@@ -83,6 +85,8 @@ Realtime voice models (Gemini Live, Grok Voice, OpenAI Realtime) are great at na
 **Bring your own agent.** VoiceClaw doesn't ship a brain -- it connects to yours. Point it at [OpenClaw](https://github.com/yagudaev/openclaw), [Hermes](https://nousresearch.com/hermes), any MCP-based agent, or your own custom endpoint. If it speaks the OpenAI chat completions protocol, it works.
 
 ## Architecture
+
+The confirmed target uses VoiceClaw Plugin Packages. A Feature Plugin is the user-managed capability, runtime-specific Contributions implement it, and versioned Capability Contracts decouple providers from consumers. Identity, authorization, isolation, data ownership, deletion, audit, migration coordination, and generation fencing remain trusted Kernel responsibilities.
 
 ```mermaid
 ---

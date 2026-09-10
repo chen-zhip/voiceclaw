@@ -2,4 +2,4 @@
 
 **Status:** Accepted
 
-The Relay scaffold reports Recovery Guidance for resubmitting input or selecting S2S Direct or S2S Operator, without claiming an executable Harness retry contract. Safe retry requires request identity, side-effect and idempotency semantics, Harness Thread continuity, Capability Profiles, and Client recovery UX; `complete-harness-provider-integrations` owns that protocol, while the scaffold never retries or switches executors automatically.
+The Relay scaffold reports Recovery Guidance for resubmitting input or selecting S2S Direct or S2S Operator, without claiming automatic Harness recovery. `establish-harness-execution-routing` may create a new Harness Execution Attempt after a known pre-dispatch failure, or after the user explicitly acknowledges the side-effect risk of an `Outcome Unknown`; it never reopens or automatically replays the prior Attempt and never silently switches executors. Provider-native resume, status recovery, rollback, and idempotency semantics remain owned by later Provider changes, including `complete-harness-provider-integrations`.
