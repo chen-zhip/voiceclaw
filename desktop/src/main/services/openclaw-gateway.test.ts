@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const isPackagedRef = { value: false }
 const existsRef = { fn: (_p: string) => false as boolean }
 const readFileRef = { fn: (_p: string, _enc: string) => '{}' }
 const writes: { path: string; content: string }[] = []
 let originalResourcesPath: string | undefined
+const TEST_RESOURCES_PATH = join(tmpdir(), 'VoiceClaw', 'Resources')
 
 vi.mock('electron', () => ({
   app: {
@@ -49,22 +52,20 @@ describe('resolveBundledOpenClawScript', () => {
   it('returns packaged path when app.isPackaged and script exists', async () => {
     isPackagedRef.value = true
     Object.defineProperty(process, 'resourcesPath', {
-      value: '/Applications/VoiceClaw.app/Contents/Resources',
+      value: TEST_RESOURCES_PATH,
       configurable: true,
     })
-    existsRef.fn = (p: string) =>
-      p === '/Applications/VoiceClaw.app/Contents/Resources/openclaw/openclaw.mjs'
+    const expected = join(TEST_RESOURCES_PATH, 'openclaw', 'openclaw.mjs')
+    existsRef.fn = (p: string) => p === expected
 
     const { resolveBundledOpenClawScript } = await import('./openclaw-gateway')
-    expect(resolveBundledOpenClawScript()).toBe(
-      '/Applications/VoiceClaw.app/Contents/Resources/openclaw/openclaw.mjs',
-    )
+    expect(resolveBundledOpenClawScript()).toBe(expected)
   })
 
   it('returns null in packaged mode when script is missing', async () => {
     isPackagedRef.value = true
     Object.defineProperty(process, 'resourcesPath', {
-      value: '/Applications/VoiceClaw.app/Contents/Resources',
+      value: TEST_RESOURCES_PATH,
       configurable: true,
     })
     existsRef.fn = () => false
@@ -75,12 +76,13 @@ describe('resolveBundledOpenClawScript', () => {
 
   it('returns dev path under vendor/openclaw/ when not packaged', async () => {
     isPackagedRef.value = false
-    existsRef.fn = (p: string) => p.endsWith('/vendor/openclaw/openclaw.mjs')
+    const suffix = join('vendor', 'openclaw', 'openclaw.mjs')
+    existsRef.fn = (p: string) => p.endsWith(suffix)
 
     const { resolveBundledOpenClawScript } = await import('./openclaw-gateway')
     const resolved = resolveBundledOpenClawScript()
     expect(resolved).not.toBeNull()
-    expect(resolved!.endsWith('/vendor/openclaw/openclaw.mjs')).toBe(true)
+    expect(resolved!.endsWith(suffix)).toBe(true)
   })
 })
 
@@ -134,9 +136,8 @@ describe('applyGeminiKeyToOpenClawConfig', () => {
 
   it('writes primary model and plugin enable when no config exists', async () => {
     existsRef.fn = () => false
-    const { applyGeminiKeyToOpenClawConfig, BUNDLED_GOOGLE_PRIMARY_MODEL } = await import(
-      './openclaw-gateway'
-    )
+    const { applyGeminiKeyToOpenClawConfig, BUNDLED_GOOGLE_PRIMARY_MODEL } =
+      await import('./openclaw-gateway')
     const changed = applyGeminiKeyToOpenClawConfig('AIzaTESTKEY')
     expect(changed).toBe(true)
     expect(writes.length).toBe(1)
@@ -159,9 +160,8 @@ describe('applyGeminiKeyToOpenClawConfig', () => {
           },
         },
       })
-    const { applyGeminiKeyToOpenClawConfig, BUNDLED_GOOGLE_PRIMARY_MODEL } = await import(
-      './openclaw-gateway'
-    )
+    const { applyGeminiKeyToOpenClawConfig, BUNDLED_GOOGLE_PRIMARY_MODEL } =
+      await import('./openclaw-gateway')
     applyGeminiKeyToOpenClawConfig('newkey')
     const written = JSON.parse(writes[0].content)
     expect(written.agents.defaults.model.primary).toBe(BUNDLED_GOOGLE_PRIMARY_MODEL)

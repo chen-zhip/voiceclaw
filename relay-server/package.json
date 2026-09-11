@@ -24,6 +24,7 @@
     "@opentelemetry/resources": "^2.7.0",
     "@opentelemetry/sdk-node": "^0.218.0",
     "@opentelemetry/sdk-trace-base": "^2.7.0",
+    "@voiceclaw/contracts": "workspace:*",
     "dotenv": "^17.4.2",
     "express": "^5.1.0",
     "ws": "^8.20.1"

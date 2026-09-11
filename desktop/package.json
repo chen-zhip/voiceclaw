@@ -19,6 +19,7 @@
     "hoistingLimits": "workspaces"
   },
   "dependencies": {
+    "@voiceclaw/contracts": "workspace:*",
     "archiver": "^7.0.1",
     "better-sqlite3": "^12.9.0",
     "electron-updater": "^6.6.2",
