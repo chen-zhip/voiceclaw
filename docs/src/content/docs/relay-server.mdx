@@ -11,6 +11,8 @@ The relay server is a TypeScript / Node.js WebSocket server that sits between cl
 
 `mode: "stt-tts"` selects the STT/TTS Harness Conversation Pipeline without changing S2S Direct or S2S Operator. The legacy `ComposedAdapter` code type orchestrates replaceable Provider ports and a Harness Integration Contract boundary, while `OutputRouter` owns the separation of private thinking, spoken summaries, and detailed screen text.
 
+This is currently a tested Relay scaffold, not a real Harness integration. The planned prototype moves Harness execution through the Desktop Host and a Codex app-server Integration Plugin; Archive and Memory are optional Capabilities, so their absence permits Relay-Session-only conversation without promoting Client storage, tracing, or Brain transcript synchronization to authority.
+
 ```mermaid
 flowchart LR
     Client[WebSocket client] -->|PCM audio| Session[RelaySession]

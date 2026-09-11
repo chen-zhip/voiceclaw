@@ -32,6 +32,23 @@ When your output names a domain concept (in an issue title, a refactor proposal,
 
 If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
 
+## Form terms by semantic family
+
+Before introducing or revising a term:
+
+1. Search code, specs, `CONTEXT.md` files, and ADRs for its general word and qualified forms.
+2. Separate domain uses from technical homonyms such as key bindings or native-library bindings.
+3. Identify the semantic family represented by the general word. Reuse it only when the new concept has the same kind of invariant and lifecycle.
+4. Put the specific object or activity before the shared family word. For example, `Workspace Binding` and `Memory Producer Binding` are both managed associations; `memory.production.pending` qualifies which activity is pending.
+5. Define the full qualified term, its owning authority, and its distinguishing invariant. Add ambiguous alternatives to `_Avoid_` in the relevant glossary.
+
+A shared word keeps one meaning across domain terms:
+
+- **`… Binding`** is a managed association between identified domain objects. The qualifier states what is associated. A host assignment, native configuration, or execution attempt is a separate concept.
+- **`… Pending`** is the accepted-but-not-started state of a named activity or request. The qualified entity or namespace supplies the subject, and a reason field explains the current cause. In a typed state machine, the short value `pending` is sufficient; cross-domain prose and events retain the qualifier, such as `Memory Production Pending` and `memory.production.pending`.
+
+The terminology step is complete only when every new term either matches an existing semantic family or introduces a deliberately distinct one, and every resolved project-specific term is recorded once in the relevant `CONTEXT.md`.
+
 ## Flag ADR conflicts
 
 If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:

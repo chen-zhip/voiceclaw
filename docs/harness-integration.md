@@ -1,6 +1,6 @@
 # Harness Integration Contract scaffold
 
-Relay uses the Harness Integration Contract as the boundary between recognized user text and streamed assistant output. `HarnessAdapter` is the legacy code identifier for the current Relay scaffold, which is exercised with injected boundary fakes; it is not a production Claude Code, Codex, or Cherry Studio runtime. Production runtimes, Desktop Host supervision, and VoiceClaw Integration Plugins belong to [`complete-harness-provider-integrations`](../openspec/changes/complete-harness-provider-integrations/proposal.md).
+Relay uses the Harness Integration Contract as the boundary between recognized user text and streamed assistant output. `HarnessAdapter` is the legacy code identifier for the current Relay scaffold, which is exercised with injected boundary fakes; it is not a production Claude Code, Codex, or Cherry Studio runtime. The prototype critical path establishes Kernel Phase 0, the Desktop Host Contract, Harness Execution Routing, and then a real Codex app-server Plugin Package whose `provider-integration` Contribution retains the VoiceClaw Integration Plugin name. [`complete-harness-provider-integrations`](../openspec/changes/complete-harness-provider-integrations/proposal.md) remains the later multi-Provider convergence change rather than the owner of the first runnable Harness slice.
 
 An adapter statically declares these scaffold capabilities before a turn starts. A declaration is a routing hint and does not prove runtime availability:
 

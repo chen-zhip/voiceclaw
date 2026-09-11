@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const VOICECLAW_WORKSPACE = join(homedir(), '.voiceclaw', 'workspace')
 const IDENTITY_PATH = join(VOICECLAW_WORKSPACE, 'IDENTITY.md')
 const SOUL_PATH = join(VOICECLAW_WORKSPACE, 'SOUL.md')
+const TEST_APP_PATH = join(tmpdir(), 'voiceclaw-app-path')
+const TEST_USER_DATA_PATH = join(tmpdir(), 'voiceclaw-identity-test')
 
 const writes: { path: string; content: string }[] = []
 const fileSystem = new Map<string, string>()
@@ -39,8 +41,8 @@ vi.mock('node:fs/promises', () => ({
 
 vi.mock('electron', () => ({
   app: {
-    getPath: () => '/tmp/voiceclaw-identity-test',
-    getAppPath: () => '/tmp/voiceclaw-app-path',
+    getPath: () => TEST_USER_DATA_PATH,
+    getAppPath: () => TEST_APP_PATH,
     isPackaged: false,
   },
   net: {
@@ -132,10 +134,11 @@ describe('writeAgentIdentity', () => {
   })
 
   it('honors VOICECLAW_WORKSPACE override when set', async () => {
-    process.env.VOICECLAW_WORKSPACE = '/tmp/custom-vc-ws'
+    const customWorkspace = join(tmpdir(), 'custom-vc-ws')
+    process.env.VOICECLAW_WORKSPACE = customWorkspace
     const { writeAgentIdentity } = await import('./identity')
     writeAgentIdentity({ name: 'Pam' })
-    expect(writes.find((w) => w.path === '/tmp/custom-vc-ws/IDENTITY.md')).toBeDefined()
+    expect(writes.find((w) => w.path === join(customWorkspace, 'IDENTITY.md'))).toBeDefined()
   })
 })
 
@@ -174,8 +177,8 @@ describe('getBundledVoicePreview', () => {
     fetchCalls = []
     vi.doMock('electron', () => ({
       app: {
-        getPath: () => '/tmp/voiceclaw-identity-test',
-        getAppPath: () => '/tmp/voiceclaw-app-path',
+        getPath: () => TEST_USER_DATA_PATH,
+        getAppPath: () => TEST_APP_PATH,
         isPackaged: false,
       },
       net: {
@@ -195,8 +198,8 @@ describe('getBundledVoicePreview', () => {
   it('reads bundled Gemini WAVs without ever hitting the network', async () => {
     const wavBytes = 'PRETEND-GEMINI-WAV-BYTES'
     fileSystem.set(
-      '/tmp/voiceclaw-app-path/resources/voice-previews/gemini/Zephyr.wav',
-      wavBytes,
+      join(TEST_APP_PATH, 'resources', 'voice-previews', 'gemini', 'Zephyr.wav'),
+      wavBytes
     )
     const { getBundledVoicePreview } = await import('./identity')
     const result = await getBundledVoicePreview({ voice: 'Zephyr' })
@@ -210,7 +213,7 @@ describe('getBundledVoicePreview', () => {
 
   it('reads bundled xAI WAVs without ever hitting the network', async () => {
     const wavBytes = 'PRETEND-XAI-WAV-BYTES'
-    fileSystem.set('/tmp/voiceclaw-app-path/resources/voice-previews/xai/eve.wav', wavBytes)
+    fileSystem.set(join(TEST_APP_PATH, 'resources', 'voice-previews', 'xai', 'eve.wav'), wavBytes)
     const { getBundledVoicePreview } = await import('./identity')
     const result = await getBundledVoicePreview({ voice: 'eve' })
     expect(result.ok).toBe(true)
@@ -222,8 +225,8 @@ describe('getBundledVoicePreview', () => {
   })
 
   it('does not write any files (no userData lazy cache)', async () => {
-    fileSystem.set('/tmp/voiceclaw-app-path/resources/voice-previews/gemini/Puck.wav', 'a')
-    fileSystem.set('/tmp/voiceclaw-app-path/resources/voice-previews/xai/rex.wav', 'b')
+    fileSystem.set(join(TEST_APP_PATH, 'resources', 'voice-previews', 'gemini', 'Puck.wav'), 'a')
+    fileSystem.set(join(TEST_APP_PATH, 'resources', 'voice-previews', 'xai', 'rex.wav'), 'b')
     const { getBundledVoicePreview } = await import('./identity')
     await getBundledVoicePreview({ voice: 'Puck' })
     await getBundledVoicePreview({ voice: 'rex' })

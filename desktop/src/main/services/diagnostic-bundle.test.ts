@@ -1,4 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('electron', () => ({
+  app: { getPath: () => '' },
+}))
+
+vi.mock('../db', () => ({ getDb: vi.fn() }))
+vi.mock('../logs', () => ({ getLogDir: vi.fn() }))
+vi.mock('./service-manager', () => ({ serviceManager: {} }))
+vi.mock('./openclaw-gateway', () => ({ getOpenClawConfigPath: vi.fn() }))
+vi.mock('../telemetry', () => ({ getDistinctId: vi.fn() }))
+
 import { redactOpenClawConfig } from './diagnostic-bundle'
 
 describe('redactOpenClawConfig', () => {
@@ -15,8 +26,10 @@ describe('redactOpenClawConfig', () => {
 
     const result = redactOpenClawConfig(config)
 
-    const providers = (result.models as Record<string, unknown>)
-      .providers as Record<string, Record<string, unknown>>
+    const providers = (result.models as Record<string, unknown>).providers as Record<
+      string,
+      Record<string, unknown>
+    >
     expect(providers.google.apiKey).toBe('<redacted>')
     expect(providers.openai.apiKey).toBe('<redacted>')
   })
@@ -74,8 +87,10 @@ describe('redactOpenClawConfig', () => {
       },
     }
     const result = redactOpenClawConfig(config)
-    const providers = (result.models as Record<string, unknown>)
-      .providers as Record<string, Record<string, unknown>>
+    const providers = (result.models as Record<string, unknown>).providers as Record<
+      string,
+      Record<string, unknown>
+    >
     expect(providers.localModel.endpoint).toBe('http://localhost:1234')
     expect('apiKey' in providers.localModel).toBe(false)
   })

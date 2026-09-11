@@ -5,6 +5,36 @@ description: Detailed system design, audio flow, session lifecycle, brain agent,
 
 import { Aside } from '@astrojs/starlight/components'
 
+<Aside type="caution" title="Current implementation and target framework">
+This page still documents the current S2S-oriented implementation. The confirmed target architecture is Harness-neutral and plugin-composed: a trusted VoiceClaw Kernel coordinates Relay, Desktop Host, Clients, and Harnesses; VoiceClaw Plugin Packages deliver Feature Plugins made from runtime Contributions behind versioned Capability Contracts. Current delivery prioritizes a Desktop prototype through Kernel Phase 0, Desktop Host, provider-neutral Routing, and a real Codex app-server vertical slice; Archive and Memory remain official Feature Plugins on a deferred path and do not block non-persistent Harness execution. The normative engineering boundary is maintained in `docs/architecture/voiceclaw-harness-boundary.md` while this public page is migrated.
+</Aside>
+
+## Target Framework Direction
+
+VoiceClaw is evolving into a composable Agent interaction and capability-hosting framework for multiple Harnesses and devices. Codex, Claude Code, DeepSeek Harness, and other Harnesses remain peers; no one Harness supplies VoiceClaw's Kernel.
+
+```mermaid
+flowchart TB
+    Kernel["Trusted VoiceClaw Kernel<br/>lifecycle · grants · RPC · isolation · audit · fencing"]
+    Package["VoiceClaw Plugin Package"]
+    Feature["Feature Plugin<br/>user-managed capability"]
+    RelayContribution["relay-service Contribution"]
+    DesktopContribution["desktop-service / worker Contribution"]
+    ClientContribution["client-ui Contribution"]
+    ProviderContribution["provider-integration Contribution"]
+    HarnessExtension["harness-extension Contribution"]
+    HarnessPlugin["External Harness Plugin"]
+
+    Kernel --> Package --> Feature
+    Feature --> RelayContribution
+    Feature --> DesktopContribution
+    Feature --> ClientContribution
+    Feature --> ProviderContribution
+    Feature --> HarnessExtension --> HarnessPlugin
+```
+
+Feature Plugin composes, Contribution implements, and Capability Contract decouples. The default distribution will provide Archive and Memory as official Feature Plugins. Their implementations are replaceable, while identity, authorization, deletion, audit, ownership, isolation, migration coordination, and generation fencing remain non-bypassable Kernel responsibilities.
+
 VoiceClaw is a three-tier system: clients (mobile/desktop) talk to a relay server over WebSocket, and the relay server talks to AI providers (Gemini Live, Grok Voice, OpenAI Realtime) over their native WebSocket APIs.
 
 ## System Overview
@@ -186,7 +216,7 @@ Both emit `session.rotating` / `session.rotated` so clients can handle the trans
 2. Relay session cleanup runs:
    - Aborts all in-flight tool calls
    - Ends the Langfuse tracing session
-   - Syncs conversation transcript to the brain agent for long-term memory
+   - Currently syncs conversation transcript to the brain agent through a legacy cleanup path; the target architecture removes this behavior and never treats it as a fallback for the Memory Feature Plugin
    - Disconnects the provider adapter
 
 ## Brain Agent
@@ -245,7 +275,7 @@ Key design decisions:
 - Progress events (`tool.progress`) stream to the client for live UI updates
 - The final result is injected back via `injectContext()` rather than as a tool result, because the AI has already moved past the tool call
 - Brain calls are cancellable -- if the AI model cancels the tool call (e.g., user changed topic), the in-flight HTTP request is aborted
-- On session disconnect, the full transcript is synced to the brain with retry logic so the agent remembers the conversation
+- The current implementation syncs the transcript to the brain on disconnect. This is a documented migration gap: the target architecture removes it and permits Memory production only through the separately authorized Memory Feature Plugin.
 
 ## Tracing
 

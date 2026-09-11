@@ -38,7 +38,7 @@ Keep the existing compatibility fields and select the STT/TTS Harness Conversati
 }
 ```
 
-Set `DEEPGRAM_API_KEY` and `ELEVENLABS_API_KEY` on Relay, or pass the keys in `sttConfig.apiKey` and `ttsConfig.apiKey`. The stable `claude-code`, `codex`, and `cherry-studio` Harness IDs are unavailable by default in this scaffold; deterministic tests provide injected boundaries. Production integrations belong to `complete-harness-provider-integrations`.
+Set `DEEPGRAM_API_KEY` and `ELEVENLABS_API_KEY` on Relay, or pass the keys in `sttConfig.apiKey` and `ttsConfig.apiKey`. The stable `claude-code`, `codex`, and `cherry-studio` Harness IDs are unavailable by default in this scaffold; deterministic tests provide injected boundaries. The first production path is planned by Kernel Phase 0, Desktop Host, Routing, and `integrate-codex-provider-prototype`; `complete-harness-provider-integrations` later adds further Providers and parity.
 
 To return to S2S Direct, remove `mode` and the STT/Harness/TTS fields and omit `voiceMode` or set it to `"direct"`. To select S2S Operator, use `mode: "s2s"` with `voiceMode: "operator"`. Relay does not automatically replay the failed input or change Conversation Pipelines.
 

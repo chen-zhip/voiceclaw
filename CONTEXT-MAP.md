@@ -1,6 +1,8 @@
 # VoiceClaw Context Map
 
-VoiceClaw is a multi-context product. The VoiceClaw Core consists of the Desktop, Mobile, and Relay contexts; the remaining workspaces support distribution, documentation, and observability.
+VoiceClaw is a Harness-neutral, multi-context Agent interaction and capability-hosting framework. Its trusted Kernel spans the Desktop, Mobile, and Relay contexts; installable Feature Plugins contribute product behavior without becoming an additional authority boundary. The remaining workspaces support distribution, documentation, and observability.
+
+System-wide plugin and framework terminology is defined in [VoiceClaw System](./CONTEXT.md). Workspace-specific terms remain in the context documents below.
 
 ## Contexts
 
@@ -20,6 +22,10 @@ VoiceClaw is a multi-context product. The VoiceClaw Core consists of the Desktop
 - **Relay → Agent execution**: Relay supports three explicit execution paths: S2S Direct, S2S Operator, and STT/TTS Harness.
 - **Relay ↔ Desktop**: Relay owns logical provider and workspace bindings; Desktop owns machine-specific paths, processes, and secret references.
 - **Harness Provider → Relay**: Harness-specific integration plugins may import provider conversations into Relay's Conversation Archive on demand or through configured background synchronization.
-- **VoiceClaw Core → Extensions**: Agent capabilities belong in Harness Plugins first; VoiceClaw Integration Plugins expose only the cross-boundary integration needed by the Core.
+- **VoiceClaw Kernel → Plugin Packages**: the Kernel validates manifests, coordinates runtime Contributions, mediates Capability Contracts, and enforces grants, isolation, ownership, deletion, audit, migration, and fencing invariants.
+- **Feature Plugin → Runtime contexts**: one Feature Plugin may contribute Relay services, Desktop services, Client UI, workers, tools, Provider integrations, or Harness extensions while each Contribution retains independent runtime state.
+- **VoiceClaw → Harness ecosystems**: Harness-native behavior belongs in Harness Plugins first; a `harness-extension` Contribution may manage those external plugins, while a `provider-integration` Contribution supplies the existing VoiceClaw Integration Plugin boundary.
+- **Archive/Memory → Kernel**: the default distribution installs official Archive and Memory Feature Plugins; their implementations are replaceable, but they can access data and other capabilities only through Kernel-enforced contracts and grants.
+- **Routing → Archive/Memory**: STT/TTS Harness routing treats Archive and Memory as optional Capability providers rather than activation dependencies; without them, live Relay-Session conversation still works, and an unavailable or failed optional call is reported as an explicit degraded feature result without falling back to Client, Tracing, Brain storage, or another Provider.
 - **Relay → Tracing Collector**: Relay may export metadata-first telemetry; collection and presentation remain supporting concerns and never become conversation storage.
 - **Website → Desktop/Mobile**: Website supports distribution and optional account flows but is not required for a core conversation.

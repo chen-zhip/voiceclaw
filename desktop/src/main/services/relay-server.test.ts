@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const isPackagedRef = { value: false }
 const existsRef = { fn: (_p: string) => false as boolean }
@@ -12,6 +14,10 @@ const allocatedPortsRef: {
 } = { openclawGateway: undefined, relay: undefined }
 const bundledNodeRef = { value: null as string | null }
 let originalResourcesPath: string | undefined
+const TEST_RESOURCES_PATH = join(tmpdir(), 'VoiceClaw', 'Resources')
+const RELAY_BUNDLED_SCRIPT_SUFFIX = join('relay-server-bundle', 'dist', 'index.js')
+const RELAY_SOURCE_SUFFIX = join('relay-server', 'src', 'index.ts')
+const TSX_CLI_SUFFIX = join('tsx', 'dist', 'cli.mjs')
 
 vi.mock('electron', () => ({
   app: {
@@ -69,22 +75,20 @@ describe('resolveBundledRelayScript', () => {
   it('returns packaged path when app.isPackaged and script exists', async () => {
     isPackagedRef.value = true
     Object.defineProperty(process, 'resourcesPath', {
-      value: '/Applications/VoiceClaw.app/Contents/Resources',
+      value: TEST_RESOURCES_PATH,
       configurable: true,
     })
-    existsRef.fn = (p: string) =>
-      p === '/Applications/VoiceClaw.app/Contents/Resources/relay-server-bundle/dist/index.js'
+    const expected = join(TEST_RESOURCES_PATH, RELAY_BUNDLED_SCRIPT_SUFFIX)
+    existsRef.fn = (p: string) => p === expected
 
     const { resolveBundledRelayScript } = await import('./relay-server')
-    expect(resolveBundledRelayScript()).toBe(
-      '/Applications/VoiceClaw.app/Contents/Resources/relay-server-bundle/dist/index.js',
-    )
+    expect(resolveBundledRelayScript()).toBe(expected)
   })
 
   it('returns null in packaged mode when script is missing', async () => {
     isPackagedRef.value = true
     Object.defineProperty(process, 'resourcesPath', {
-      value: '/Applications/VoiceClaw.app/Contents/Resources',
+      value: TEST_RESOURCES_PATH,
       configurable: true,
     })
     existsRef.fn = () => false
@@ -95,12 +99,12 @@ describe('resolveBundledRelayScript', () => {
 
   it('returns dev path when not packaged and script exists in resources/', async () => {
     isPackagedRef.value = false
-    existsRef.fn = (p: string) => p.endsWith('/resources/relay-server-bundle/dist/index.js')
+    existsRef.fn = (p: string) => p.endsWith(join('resources', RELAY_BUNDLED_SCRIPT_SUFFIX))
 
     const { resolveBundledRelayScript } = await import('./relay-server')
     const resolved = resolveBundledRelayScript()
     expect(resolved).not.toBeNull()
-    expect(resolved!.endsWith('/resources/relay-server-bundle/dist/index.js')).toBe(true)
+    expect(resolved!.endsWith(join('resources', RELAY_BUNDLED_SCRIPT_SUFFIX))).toBe(true)
   })
 
   it('returns null in dev when script is absent (the common dev case)', async () => {
@@ -265,26 +269,25 @@ describe('resolveRelaySpawn', () => {
   it('packaged: returns bundled-node + bundled-script when both exist', async () => {
     isPackagedRef.value = true
     Object.defineProperty(process, 'resourcesPath', {
-      value: '/Applications/VoiceClaw.app/Contents/Resources',
+      value: TEST_RESOURCES_PATH,
       configurable: true,
     })
-    bundledNodeRef.value = '/Applications/VoiceClaw.app/Contents/Resources/bin/node'
-    existsRef.fn = (p: string) =>
-      p === '/Applications/VoiceClaw.app/Contents/Resources/relay-server-bundle/dist/index.js'
+    const bundledNode = join(TEST_RESOURCES_PATH, 'bin', 'node')
+    const bundledScript = join(TEST_RESOURCES_PATH, RELAY_BUNDLED_SCRIPT_SUFFIX)
+    bundledNodeRef.value = bundledNode
+    existsRef.fn = (p: string) => p === bundledScript
 
     const { resolveRelaySpawn } = await import('./relay-server')
     const spec = resolveRelaySpawn()
     expect(spec).not.toBeNull()
-    expect(spec!.command).toBe('/Applications/VoiceClaw.app/Contents/Resources/bin/node')
-    expect(spec!.args).toEqual([
-      '/Applications/VoiceClaw.app/Contents/Resources/relay-server-bundle/dist/index.js',
-    ])
+    expect(spec!.command).toBe(bundledNode)
+    expect(spec!.args).toEqual([bundledScript])
   })
 
   it('packaged: returns null when bundled script is missing', async () => {
     isPackagedRef.value = true
     Object.defineProperty(process, 'resourcesPath', {
-      value: '/Applications/VoiceClaw.app/Contents/Resources',
+      value: TEST_RESOURCES_PATH,
       configurable: true,
     })
     existsRef.fn = () => false
@@ -296,29 +299,26 @@ describe('resolveRelaySpawn', () => {
   it('dev: spawns relay-server source via tsx when bundled script is absent', async () => {
     isPackagedRef.value = false
     bundledNodeRef.value = null
-    existsRef.fn = (p: string) =>
-      p.endsWith('/relay-server/src/index.ts') ||
-      p.endsWith('/tsx/dist/cli.mjs')
+    existsRef.fn = (p: string) => p.endsWith(RELAY_SOURCE_SUFFIX) || p.endsWith(TSX_CLI_SUFFIX)
 
     const { resolveRelaySpawn } = await import('./relay-server')
     const spec = resolveRelaySpawn()
     expect(spec).not.toBeNull()
     expect(spec!.command).toBe(process.execPath)
-    expect(spec!.args[0].endsWith('/tsx/dist/cli.mjs')).toBe(true)
-    expect(spec!.args[1].endsWith('/relay-server/src/index.ts')).toBe(true)
+    expect(spec!.args[0].endsWith(TSX_CLI_SUFFIX)).toBe(true)
+    expect(spec!.args[1].endsWith(RELAY_SOURCE_SUFFIX)).toBe(true)
   })
 
   it('dev: prefers staged bundle over source when the bundle is present', async () => {
     isPackagedRef.value = false
     bundledNodeRef.value = '/dev/bin/node'
-    existsRef.fn = (p: string) =>
-      p.endsWith('/resources/relay-server-bundle/dist/index.js')
+    existsRef.fn = (p: string) => p.endsWith(join('resources', RELAY_BUNDLED_SCRIPT_SUFFIX))
 
     const { resolveRelaySpawn } = await import('./relay-server')
     const spec = resolveRelaySpawn()
     expect(spec).not.toBeNull()
     expect(spec!.command).toBe('/dev/bin/node')
-    expect(spec!.args[0].endsWith('/resources/relay-server-bundle/dist/index.js')).toBe(true)
+    expect(spec!.args[0].endsWith(join('resources', RELAY_BUNDLED_SCRIPT_SUFFIX))).toBe(true)
   })
 
   it('dev: returns null when neither bundle, source, nor tsx is available', async () => {
@@ -333,7 +333,7 @@ describe('resolveRelaySpawn', () => {
   it('dev: returns null when source exists but tsx cannot be located', async () => {
     isPackagedRef.value = false
     bundledNodeRef.value = null
-    existsRef.fn = (p: string) => p.endsWith('/relay-server/src/index.ts')
+    existsRef.fn = (p: string) => p.endsWith(RELAY_SOURCE_SUFFIX)
 
     const { resolveRelaySpawn } = await import('./relay-server')
     expect(resolveRelaySpawn()).toBeNull()
@@ -357,7 +357,7 @@ describe('getTailnetUrl', () => {
         hostname: 'macbook.tail0abcd.ts.net',
         certPath: '/tmp/cert.pem',
         keyPath: '/tmp/key.pem',
-      }),
+      })
     )
     expect(url).toBe('wss://macbook.tail0abcd.ts.net:8080/ws')
   })
@@ -369,7 +369,7 @@ describe('getTailnetUrl', () => {
       () => ({
         en0: [{ family: 'IPv4', address: '100.64.0.5', internal: false } as never],
       }),
-      () => null,
+      () => null
     )
     expect(url).toBe('ws://100.64.0.5:8080/ws')
   })
@@ -382,12 +382,8 @@ describe('getTailnetUrl', () => {
     allocatedPortsRef.relay = 8080
     const { getTailnetUrl } = await import('./relay-server')
     const url = getTailnetUrl(() => ({
-      en0: [
-        { family: 'IPv4', address: '192.168.1.42', internal: false } as never,
-      ],
-      tailscale0: [
-        { family: 'IPv4', address: '100.115.7.9', internal: false } as never,
-      ],
+      en0: [{ family: 'IPv4', address: '192.168.1.42', internal: false } as never],
+      tailscale0: [{ family: 'IPv4', address: '100.115.7.9', internal: false } as never],
     }))
     expect(url).toBe('ws://100.115.7.9:8080/ws')
   })
@@ -456,9 +452,7 @@ describe('startBundledRelayServer (external relay detection)', () => {
 
   it('skips spawning and records the preferred port when /health responds on :8080', async () => {
     isPackagedRef.value = false
-    existsRef.fn = (p: string) =>
-      p.endsWith('/relay-server/src/index.ts') ||
-      p.endsWith('/tsx/dist/cli.mjs')
+    existsRef.fn = (p: string) => p.endsWith(RELAY_SOURCE_SUFFIX) || p.endsWith(TSX_CLI_SUFFIX)
 
     const { createServer } = await import('node:http')
     const server = createServer((req, res) => {
@@ -483,9 +477,9 @@ describe('startBundledRelayServer (external relay detection)', () => {
       const { startBundledRelayServer } = await import('./relay-server')
       await startBundledRelayServer()
       expect(startSpy).not.toHaveBeenCalled()
-      expect((ports.markAllocatedPort as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      expect(ports.markAllocatedPort as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
         'relay',
-        8080,
+        8080
       )
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
