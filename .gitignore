@@ -53,8 +53,7 @@ openspec/.cache/
 .agent-grid/
 .antigravitycli/
 
-# Local AI assistant configuration. The one shared command remains tracked.
-.agents/
+# Local AI assistant configuration. The shared OpenSpec agent skills are tracked.
 .trae/
 .claude/*
 !.claude/commands/
