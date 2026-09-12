@@ -30,7 +30,9 @@ type OnboardingState = {
   completedAt: string | null
 }
 
-type AuthCallback = { ok: true; user: { id?: string; email?: string | null; name?: string | null } | null } | { ok: false; error: string }
+type AuthCallback =
+  | { ok: true; user: { id?: string; email?: string | null; name?: string | null } | null }
+  | { ok: false; error: string }
 
 type AttachmentInputBridge = {
   kind: 'image'
@@ -58,7 +60,10 @@ type AttachmentRecordBridge = {
 }
 
 type PickImageResult =
-  | { ok: true; file: { base64: string; byteSize: number; mime: string; originalName: string | null } }
+  | {
+      ok: true
+      file: { base64: string; byteSize: number; mime: string; originalName: string | null }
+    }
   | { ok: false; cancelled: true }
   | { ok: false; error: string }
 
@@ -106,6 +111,33 @@ const electronAPI = {
         relayApiKey: string
       }>,
   },
+  desktopHost: {
+    status: () =>
+      ipcRenderer.invoke('desktop-host:status') as Promise<
+        Array<{
+          hostId: string
+          status: 'online' | 'offline' | 'revoked'
+          lastActivityAt: string | null
+        }>
+      >,
+    enroll: (installationId: string) =>
+      ipcRenderer.invoke('desktop-host:enroll', installationId) as Promise<{ ok: true }>,
+    revoke: (hostId: string) =>
+      ipcRenderer.invoke('desktop-host:revoke', hostId) as Promise<{ ok: true }>,
+    reregister: (installationId: string) =>
+      ipcRenderer.invoke('desktop-host:reregister', installationId) as Promise<{ ok: true }>,
+    saveProviderConfiguration: (configuration: unknown) =>
+      ipcRenderer.invoke('desktop-host:save-provider-configuration', configuration) as Promise<{
+        ok: true
+      }>,
+    providerReadiness: (
+      bindingId: string,
+      readiness: { configured: boolean; executableDetected: boolean }
+    ) =>
+      ipcRenderer.invoke('desktop-host:provider-readiness', bindingId, readiness) as Promise<
+        Record<string, string | boolean>
+      >,
+  },
   tray: {
     setCallActive: (active: boolean) =>
       ipcRenderer.invoke('tray:setCallActive', active) as Promise<void>,
@@ -143,10 +175,8 @@ const electronAPI = {
       return () => ipcRenderer.removeListener('call-bar:visibility', wrapped)
     },
     onAudioLevels: (handler: (payload: { input: number; output: number }) => void) => {
-      const wrapped = (
-        _e: IpcRendererEvent,
-        payload: { input: number; output: number },
-      ) => handler(payload)
+      const wrapped = (_e: IpcRendererEvent, payload: { input: number; output: number }) =>
+        handler(payload)
       ipcRenderer.on('call-bar:audio-levels', wrapped)
       return () => ipcRenderer.removeListener('call-bar:audio-levels', wrapped)
     },
@@ -170,8 +200,8 @@ const electronAPI = {
       conversationId: number,
       role: string,
       content: string,
-      latency?: { sttLatencyMs?: number, llmLatencyMs?: number, ttsLatencyMs?: number },
-      providers?: { sttProvider?: string, llmProvider?: string, ttsProvider?: string },
+      latency?: { sttLatencyMs?: number; llmLatencyMs?: number; ttsLatencyMs?: number },
+      providers?: { sttProvider?: string; llmProvider?: string; ttsProvider?: string }
     ) => ipcRenderer.invoke('db:addMessage', conversationId, role, content, latency, providers),
     getMessages: (conversationId: number) => ipcRenderer.invoke('db:getMessages', conversationId),
     deleteMessage: (id: number) =>
@@ -266,13 +296,11 @@ const electronAPI = {
       }>,
     speakPreview: (params: { voice: string; text: string }) =>
       ipcRenderer.invoke('identity:speakPreview', params) as Promise<
-        | { ok: true; audioBase64: string; mimeType: string }
-        | { ok: false; error: string }
+        { ok: true; audioBase64: string; mimeType: string } | { ok: false; error: string }
       >,
     getVoicePreview: (params: { voice: string }) =>
       ipcRenderer.invoke('identity:getVoicePreview', params) as Promise<
-        | { ok: true; audioBase64: string; mimeType: string }
-        | { ok: false; error: string }
+        { ok: true; audioBase64: string; mimeType: string } | { ok: false; error: string }
       >,
   },
   screen: {
@@ -309,7 +337,7 @@ const electronAPI = {
           points: Array<{ x: number; y: number }>
         }>
         bounds: { x: number; y: number; width: number; height: number; scaleFactor: number }
-      }) => void,
+      }) => void
     ) => {
       const wrapped = (_e: IpcRendererEvent, p: Parameters<typeof handler>[0]) => handler(p)
       ipcRenderer.on('draw-overlay:strokes', wrapped)
@@ -322,7 +350,7 @@ const electronAPI = {
         width: number
         height: number
         scaleFactor: number
-      }) => void,
+      }) => void
     ) => {
       const wrapped = (_e: IpcRendererEvent, b: Parameters<typeof handler>[0]) => handler(b)
       ipcRenderer.on('draw-overlay:display-bounds', wrapped)
@@ -342,7 +370,7 @@ const electronAPI = {
         color: string
         width: number
         points: Array<{ x: number; y: number }>
-      }>,
+      }>
     ) => ipcRenderer.send('draw-overlay:strokes', { strokes }),
     onMode: (handler: (mode: 'idle' | 'draw') => void) => {
       const wrapped = (_e: IpcRendererEvent, mode: 'idle' | 'draw') => handler(mode)
@@ -361,7 +389,7 @@ const electronAPI = {
         width: number
         height: number
         scaleFactor: number
-      }) => void,
+      }) => void
     ) => {
       const wrapped = (_e: IpcRendererEvent, b: Parameters<typeof handler>[0]) => handler(b)
       ipcRenderer.on('draw-overlay:bounds', wrapped)
@@ -369,10 +397,11 @@ const electronAPI = {
     },
   },
   logs: {
-    reveal: () => ipcRenderer.invoke('logs:reveal') as Promise<{ ok: boolean, path: string }>,
+    reveal: () => ipcRenderer.invoke('logs:reveal') as Promise<{ ok: boolean; path: string }>,
   },
   net: {
-    healthCheck: (url: string) => ipcRenderer.invoke('net:healthCheck', url) as Promise<{ ok: boolean, error?: string }>,
+    healthCheck: (url: string) =>
+      ipcRenderer.invoke('net:healthCheck', url) as Promise<{ ok: boolean; error?: string }>,
   },
   updates: {
     getState: () =>
@@ -395,14 +424,16 @@ const electronAPI = {
       }>,
     installNow: (source: 'banner' | 'settings' | 'tray') =>
       ipcRenderer.invoke('updates:installNow', source) as Promise<void>,
-    onStateChanged: (handler: (state: {
-      currentVersion: string
-      stagedVersion: string | null
-      lastChecked: number | null
-      status: string
-      releaseNotes: string | null
-      error: string | null
-    }) => void) => {
+    onStateChanged: (
+      handler: (state: {
+        currentVersion: string
+        stagedVersion: string | null
+        lastChecked: number | null
+        status: string
+        releaseNotes: string | null
+        error: string | null
+      }) => void
+    ) => {
       const wrapped = (_e: IpcRendererEvent, s: Parameters<typeof handler>[0]) => handler(s)
       ipcRenderer.on('updates:stateChanged', wrapped)
       return () => ipcRenderer.removeListener('updates:stateChanged', wrapped)
@@ -421,8 +452,8 @@ const electronAPI = {
     capture: (event: string, props?: Record<string, unknown>) =>
       ipcRenderer.invoke('telemetry:capture', event, props) as Promise<void>,
     captureException: (
-      err: { message: string, stack?: string },
-      context?: Record<string, unknown>,
+      err: { message: string; stack?: string },
+      context?: Record<string, unknown>
     ) => ipcRenderer.invoke('telemetry:captureException', err, context) as Promise<void>,
   },
   diagnostics: {
@@ -465,7 +496,7 @@ const electronAPI = {
       >,
     set: (
       action: 'mute' | 'annotate' | 'clearAnnotations' | 'screenShare' | 'toggleCall',
-      accelerator: string,
+      accelerator: string
     ) =>
       ipcRenderer.invoke('shortcuts:set', action, accelerator) as Promise<
         { ok: true; accelerator: string } | { ok: false; error: string }
@@ -484,12 +515,12 @@ const electronAPI = {
       >,
     onTriggered: (
       handler: (
-        action: 'mute' | 'annotate' | 'clearAnnotations' | 'screenShare' | 'toggleCall',
-      ) => void,
+        action: 'mute' | 'annotate' | 'clearAnnotations' | 'screenShare' | 'toggleCall'
+      ) => void
     ) => {
       const wrapped = (
         _e: IpcRendererEvent,
-        action: 'mute' | 'annotate' | 'clearAnnotations' | 'screenShare' | 'toggleCall',
+        action: 'mute' | 'annotate' | 'clearAnnotations' | 'screenShare' | 'toggleCall'
       ) => handler(action)
       ipcRenderer.on('shortcuts:triggered', wrapped)
       return () => ipcRenderer.removeListener('shortcuts:triggered', wrapped)

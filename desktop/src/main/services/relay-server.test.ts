@@ -450,6 +450,47 @@ describe('startBundledRelayServer (external relay detection)', () => {
     vi.resetModules()
   })
 
+  it('passes one bundled Host bootstrap only through the controlled launch', async () => {
+    existsRef.fn = (path: string) =>
+      path.endsWith(RELAY_SOURCE_SUFFIX) || path.endsWith(TSX_CLI_SUFFIX)
+    const ports = await import('../ports')
+    vi.mocked(ports.allocatePort).mockResolvedValue(43123)
+    const sm = await import('./service-manager')
+    const startSpy = vi.spyOn(sm.serviceManager, 'start').mockResolvedValue()
+    const secrets = ['startup-secret-1', 'startup-secret-2']
+    const stackIds = ['stack-1', 'stack-2']
+    const { expireBundledHostLaunch, getBundledHostRuntimeEnvironment, startBundledRelayServer } =
+      await import('./relay-server')
+
+    await startBundledRelayServer({
+      createBootstrapSecret: () => secrets.shift() as string,
+      createStackId: () => stackIds.shift() as string,
+    })
+    const firstRelayEnv = startSpy.mock.calls[0][0].env
+    const firstHostEnv = getBundledHostRuntimeEnvironment()
+    expect(firstRelayEnv).toMatchObject({
+      VOICECLAW_LOCAL_HOST_BOOTSTRAP: 'startup-secret-1',
+      VOICECLAW_LOCAL_HOST_STACK_ID: 'stack-1',
+    })
+    expect(firstHostEnv).toMatchObject({
+      VOICECLAW_LOCAL_HOST_BOOTSTRAP: 'startup-secret-1',
+      VOICECLAW_LOCAL_HOST_STACK_ID: 'stack-1',
+    })
+    expect(process.env.VOICECLAW_LOCAL_HOST_BOOTSTRAP).toBeUndefined()
+
+    await startBundledRelayServer({
+      createBootstrapSecret: () => secrets.shift() as string,
+      createStackId: () => stackIds.shift() as string,
+    })
+    expect(startSpy.mock.calls[1][0].env).toMatchObject({
+      VOICECLAW_LOCAL_HOST_BOOTSTRAP: 'startup-secret-2',
+      VOICECLAW_LOCAL_HOST_STACK_ID: 'stack-2',
+    })
+
+    expireBundledHostLaunch()
+    expect(getBundledHostRuntimeEnvironment()).toBeNull()
+  })
+
   it('skips spawning and records the preferred port when /health responds on :8080', async () => {
     isPackagedRef.value = false
     existsRef.fn = (p: string) => p.endsWith(RELAY_SOURCE_SUFFIX) || p.endsWith(TSX_CLI_SUFFIX)

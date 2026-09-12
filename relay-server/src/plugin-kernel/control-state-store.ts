@@ -2,6 +2,7 @@ import { open, readFile, rename, unlink } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { dirname, relative, resolve } from 'node:path'
 import { immutableCopy } from './immutable.js'
+import { hasExactKeys, isNonemptyString, isRecord } from '@voiceclaw/contracts'
 
 export interface CapabilityGrantRecord {
   id: string
@@ -14,16 +15,51 @@ export interface CapabilityGrantRecord {
   revoked: boolean
 }
 
-export interface HostRegistrationRecord {
+export interface LegacyHostRegistrationRecord {
   id: string
+  installationId?: never
+  credentialVerifier?: never
+  credentialExpiresAt?: never
+  enrollmentTokenVerifier?: never
+  enrolledAt?: never
+  lastActivityAt?: never
+  authorityVersion?: never
   revoked: boolean
 }
 
-export interface ActiveHostAssignmentRecord {
+export interface EnrolledHostRegistrationRecord {
+  id: string
+  installationId: string
+  credentialVerifier: string
+  credentialExpiresAt: string | null
+  enrollmentTokenVerifier: string
+  enrolledAt: string
+  lastActivityAt: string | null
+  authorityVersion: number
+  revoked: boolean
+}
+
+export type HostRegistrationRecord = LegacyHostRegistrationRecord | EnrolledHostRegistrationRecord
+
+export interface LegacyActiveHostAssignmentRecord {
   bindingId: string
   hostId: string
   generation: number
+  providerId?: never
+  workspaceBindingId?: never
 }
+
+export interface ExactActiveHostAssignmentRecord {
+  bindingId: string
+  hostId: string
+  providerId: string
+  workspaceBindingId: string
+  generation: number
+}
+
+export type ActiveHostAssignmentRecord =
+  | LegacyActiveHostAssignmentRecord
+  | ExactActiveHostAssignmentRecord
 
 export interface ConversationThreadMappingRecord {
   conversationId: string
@@ -225,23 +261,45 @@ function isCapabilityGrant(value: unknown): value is CapabilityGrantRecord {
   )
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 function isHostRegistration(value: unknown): value is HostRegistrationRecord {
+  if (!isRecord(value) || !isNonemptyString(value.id) || typeof value.revoked !== 'boolean') {
+    return false
+  }
+  if (hasExactKeys(value, ['id', 'revoked'])) return true
   return (
-    isExactRecord(value, ['id', 'revoked']) &&
-    isNonemptyString(value.id) &&
-    typeof value.revoked === 'boolean'
+    hasExactKeys(value, [
+      'id',
+      'installationId',
+      'credentialVerifier',
+      'credentialExpiresAt',
+      'enrollmentTokenVerifier',
+      'enrolledAt',
+      'lastActivityAt',
+      'authorityVersion',
+      'revoked',
+    ]) &&
+    isNonemptyString(value.installationId) &&
+    isVerifier(value.credentialVerifier) &&
+    (value.credentialExpiresAt === null || isIsoDate(value.credentialExpiresAt)) &&
+    isVerifier(value.enrollmentTokenVerifier) &&
+    isIsoDate(value.enrolledAt) &&
+    (value.lastActivityAt === null || isIsoDate(value.lastActivityAt)) &&
+    Number.isSafeInteger(value.authorityVersion) &&
+    (value.authorityVersion as number) >= 1
   )
 }
 
 function isActiveHostAssignment(value: unknown): value is ActiveHostAssignmentRecord {
+  if (!isRecord(value)) return false
+  const exactKeys =
+    hasExactKeys(value, ['bindingId', 'hostId', 'generation']) ||
+    hasExactKeys(value, ['bindingId', 'hostId', 'providerId', 'workspaceBindingId', 'generation'])
   return (
-    isExactRecord(value, ['bindingId', 'hostId', 'generation']) &&
+    exactKeys &&
     isNonemptyString(value.bindingId) &&
     isNonemptyString(value.hostId) &&
+    (value.providerId === undefined || isNonemptyString(value.providerId)) &&
+    (value.workspaceBindingId === undefined || isNonemptyString(value.workspaceBindingId)) &&
     Number.isSafeInteger(value.generation) &&
     (value.generation as number) >= 0
   )
@@ -264,10 +322,14 @@ function isExactRecord(value: unknown, keys: string[]): value is Record<string, 
   return actual.length === expected.length && actual.every((key, index) => key === expected[index])
 }
 
-function isNonemptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0
-}
-
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(isNonemptyString)
+}
+
+function isVerifier(value: unknown): value is string {
+  return typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value)
+}
+
+function isIsoDate(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value))
 }
