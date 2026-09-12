@@ -66,6 +66,7 @@ export interface ConversationThreadMappingRecord {
   providerId: string
   workspaceBindingId: string
   threadId: string
+  status?: 'active' | 'dormant'
 }
 
 export interface ControlStateDocument {
@@ -307,11 +308,19 @@ function isActiveHostAssignment(value: unknown): value is ActiveHostAssignmentRe
 
 function isConversationThreadMapping(value: unknown): value is ConversationThreadMappingRecord {
   return (
-    isExactRecord(value, ['conversationId', 'providerId', 'workspaceBindingId', 'threadId']) &&
+    (isExactRecord(value, ['conversationId', 'providerId', 'workspaceBindingId', 'threadId']) ||
+      isExactRecord(value, [
+        'conversationId',
+        'providerId',
+        'workspaceBindingId',
+        'threadId',
+        'status',
+      ])) &&
     isNonemptyString(value.conversationId) &&
     isNonemptyString(value.providerId) &&
     isNonemptyString(value.workspaceBindingId) &&
-    isNonemptyString(value.threadId)
+    isNonemptyString(value.threadId) &&
+    (value.status === undefined || value.status === 'active' || value.status === 'dormant')
   )
 }
 

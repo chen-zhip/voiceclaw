@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import { randomUUID } from 'node:crypto'
 import { initLangfuse, shutdownLangfuse } from './tracing/langfuse.js'
 // initLangfuse must run BEFORE any module that may create OTEL spans on import,
 // since the NodeSDK replaces the global TracerProvider.
@@ -8,6 +9,7 @@ import { mkdir } from 'node:fs/promises'
 import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
 import { checkRelayCredential, RelaySession } from './session.js'
+import { createAdapter } from './adapters/index.js'
 import { log, warn, error as logError } from './log.js'
 import { gracefulShutdown } from './shutdown.js'
 import { createRelayServer } from './server-factory.js'
@@ -25,6 +27,11 @@ import { ActiveHostAssignmentService } from './desktop-host/active-assignment.js
 import { CapabilityGrantEvaluator } from './plugin-kernel/capability-grants.js'
 import { HostContributionRegistry } from './desktop-host/provider-registration.js'
 import { bootstrapProductionHostKernel } from './desktop-host/production-kernel.js'
+import { getThinkingStorage } from './thinking/storage.js'
+import { ConversationRouting } from './harness-execution/conversation-routing.js'
+import { ConversationThreadMappings } from './harness-execution/thread-mapping.js'
+import type { HarnessRoutingPort } from './harness-execution/dispatch.js'
+import { createProductionHarnessRouting } from './harness-execution/production-routing.js'
 
 const SHUTDOWN_TIMEOUT_MS = 10_000
 
@@ -51,6 +58,25 @@ const assignments = new ActiveHostAssignmentService(controlState, hostGateway)
 const capabilityGrants = new CapabilityGrantEvaluator(controlState)
 const hostContributions = new HostContributionRegistry(hostGateway)
 const hostKernel = await bootstrapProductionHostKernel(process.env, controlStatePath, controlState)
+const harnessRouting = new ConversationRouting()
+const harnessMappings = new ConversationThreadMappings(controlState)
+const harnessPackageId = process.env.VOICECLAW_HARNESS_PACKAGE_ID?.trim()
+const harnessContributionId = process.env.VOICECLAW_HARNESS_CONTRIBUTION_ID?.trim()
+const harnessRoutingPort: HarnessRoutingPort | undefined =
+  hostKernel && harnessPackageId && harnessContributionId
+    ? createProductionHarnessRouting({
+        kernel: hostKernel,
+        controlState,
+        routing: harnessRouting,
+        mappings: harnessMappings,
+        selectedContribution: {
+          packageId: harnessPackageId,
+          contributionId: harnessContributionId,
+        },
+        createInvocationId: () => randomUUID(),
+        createTraceId: () => randomUUID(),
+      })
+    : undefined
 const management = new HostManagementService(controlState, hostGateway, enrollment, {
   authorizeOwner: (principal) => principal.kind === 'user',
 })
@@ -87,7 +113,7 @@ const { clientWebSocketServer: wss, hostWebSocketServer: hostWss } = mountRelayW
           : {}),
       }).authorized,
     onClientConnection: (ws) => {
-      new RelaySession(ws)
+      new RelaySession(ws, createAdapter, getThinkingStorage(), harnessRoutingPort)
     },
   }
 )
