@@ -39,20 +39,13 @@ import {
 } from './draw-overlay'
 import { registerShortcutHandlers, unregisterAllShortcuts } from './shortcuts'
 import { serviceManager } from './services/service-manager'
-import {
-  applyGeminiKeyToOpenClawConfig,
-  startBundledOpenClaw,
-} from './services/openclaw-gateway'
-import { startBundledRelayServer } from './services/relay-server'
+import { applyGeminiKeyToOpenClawConfig, startBundledOpenClaw } from './services/openclaw-gateway'
+import { expireBundledHostLaunch, startBundledRelayServer } from './services/relay-server'
 import { startDeviceTokenBridge, stopDeviceTokenBridge } from './services/device-token-bridge'
 import { ensureDefault as ensureLaunchAtLoginDefault } from './login-items'
 import { initAutoUpdater } from './updater'
 import { setRebuildTray } from './services/auto-updater'
-import {
-  ensureBundledRelayDefaults,
-  ensureOnboardingSchema,
-  resetOnboarding,
-} from './onboarding'
+import { ensureBundledRelayDefaults, ensureOnboardingSchema, resetOnboarding } from './onboarding'
 import { getProviderKey } from './provider-keys'
 import { registerAuthDeepLink } from './auth'
 import {
@@ -64,8 +57,10 @@ import {
   registerProcessHandlers as registerTelemetryHandlers,
   shutdown as shutdownTelemetry,
 } from './telemetry'
+import type { DesktopHostRuntime } from './desktop-host/host-transport'
 
 const isDev = !app.isPackaged
+let desktopHostRuntime: DesktopHostRuntime | undefined
 
 // Prevent multiple instances so the tray stays singular.
 const hasLock = app.requestSingleInstanceLock()
@@ -81,7 +76,7 @@ app.whenReady().then(async () => {
   // Packaged builds get their dock icon from the bundled .icns; dev needs it set explicitly.
   if (isDev) {
     const devDockIcon = nativeImage.createFromPath(
-      join(app.getAppPath(), 'resources', 'dock', 'icon.png'),
+      join(app.getAppPath(), 'resources', 'dock', 'icon.png')
     )
     if (!devDockIcon.isEmpty()) app.dock?.setIcon(devDockIcon)
   }
@@ -111,7 +106,7 @@ app.whenReady().then(async () => {
     sender === getMainWindow()?.webContents
 
   registerAuthDeepLink()
-  registerIpcHandlers()
+  desktopHostRuntime = registerIpcHandlers()
   registerScreenCaptureHandlers(isMainRendererSender)
   registerDrawOverlayHandlers()
   registerShortcutHandlers((action) => {
@@ -240,7 +235,7 @@ app.whenReady().then(async () => {
     if (e.sender !== getMainWindow()?.webContents) return
     setAudioLevels(
       typeof payload?.input === 'number' ? payload.input : 0,
-      typeof payload?.output === 'number' ? payload.output : 0,
+      typeof payload?.output === 'number' ? payload.output : 0
     )
   })
 
@@ -266,12 +261,12 @@ app.whenReady().then(async () => {
       console.warn('[openclaw] failed to start', err)
       captureException(err, { source: 'startBundledOpenClaw' })
     })
-    .then(() =>
-      startBundledRelayServer().catch((err) => {
-        console.warn('[relay] failed to start', err)
-        captureException(err, { source: 'startBundledRelayServer' })
-      }),
-    )
+    .then(() => startBundledRelayServer())
+    .then(() => desktopHostRuntime?.start())
+    .catch((err) => {
+      console.warn('[relay/desktop-host] failed to start', err)
+      captureException(err, { source: 'DesktopHostRuntime.startup' })
+    })
 
   // Check for app updates. No-op in dev or when disabled.
   initAutoUpdater().catch((err) => {
@@ -308,6 +303,7 @@ app.on('before-quit', async (event) => {
     event.preventDefault()
     quittingFlushed = true
     try {
+      await desktopHostRuntime?.stop()
       await flushTelemetry()
       await shutdownTelemetry()
     } finally {
@@ -318,6 +314,7 @@ app.on('before-quit', async (event) => {
 
 app.on('will-quit', () => {
   unregisterAllShortcuts()
+  expireBundledHostLaunch()
   serviceManager.stopAll()
   destroyCallBar()
   destroyDrawOverlay()
@@ -364,9 +361,9 @@ function isCallBarEnabled(): boolean {
   if (sessionHiddenByUser) return false
   try {
     const db = getDb()
-    const row = db
-      .prepare('SELECT value FROM settings WHERE key = ?')
-      .get('call_bar_enabled') as { value: string } | undefined
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('call_bar_enabled') as
+      | { value: string }
+      | undefined
     // Default ON — explicit opt-out only.
     return row?.value !== 'false'
   } catch {

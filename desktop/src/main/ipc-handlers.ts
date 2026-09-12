@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, net, shell, systemPreferences } from 'electron'
+import { app, dialog, ipcMain, net, safeStorage, shell, systemPreferences } from 'electron'
 import { readFileSync, statSync } from 'fs'
 import { extname } from 'path'
 import {
@@ -12,7 +12,26 @@ import {
 import { getDb } from './db'
 import { isLaunchAtLoginEnabled, setLaunchAtLogin } from './login-items'
 import { serviceManager } from './services/service-manager'
-import { buildRelayEnv, getTailnetUrl } from './services/relay-server'
+import {
+  buildRelayEnv,
+  expireBundledHostLaunch,
+  getBundledHostRuntimeEnvironment,
+  getBundledHostUrl,
+  getTailnetUrl,
+} from './services/relay-server'
+import { DesktopHostCredentialStore } from './desktop-host/host-transport'
+import { DesktopHostRuntime } from './desktop-host/host-transport'
+import {
+  registerHostManagementIpc,
+  RelayHostManagementClient,
+} from './desktop-host/host-management-ipc'
+import {
+  DesktopSettingsStorage,
+  NativeProviderConfigurationService,
+} from './desktop-host/native-provider-configuration'
+import { registerNativeProviderConfigurationIpc } from './desktop-host/native-provider-configuration-ipc'
+import { DesktopHostContributionRuntime } from './desktop-host/host-contributions'
+import { SqliteHostCredentialPersistence } from './desktop-host/host-credential-persistence'
 import {
   createDeviceToken,
   listDeviceTokens,
@@ -34,6 +53,7 @@ import {
   type OnboardingPayload,
   type WizardStepId,
   ensureBundledRelayDefaults,
+  getBundledRelayApiKey,
   getOnboardingState,
   markOnboardingComplete,
   resetOnboarding,
@@ -49,18 +69,10 @@ import {
 } from './provider-keys'
 import { detectBrains } from './brain-detect'
 import { runAllChecks } from './services/brain-doctor'
-import {
-  checkForUpdatesNow,
-  getUpdateState,
-  installNow,
-} from './services/auto-updater'
+import { checkForUpdatesNow, getUpdateState, installNow } from './services/auto-updater'
 import { startSignInFlow } from './auth'
 import { getMainWindow } from './window-lifecycle'
-import {
-  getActiveProvider,
-  providerForVoice,
-  setVoiceForProviderSync,
-} from './voice-prefs'
+import { getActiveProvider, providerForVoice, setVoiceForProviderSync } from './voice-prefs'
 import {
   capture as telemetryCapture,
   captureException as telemetryCaptureException,
@@ -69,7 +81,74 @@ import {
   setOptedOut as telemetrySetOptedOut,
 } from './telemetry'
 
-export function registerIpcHandlers() {
+export function registerIpcHandlers(): DesktopHostRuntime {
+  const hostCredentialStore = new DesktopHostCredentialStore(
+    safeStorage,
+    new SqliteHostCredentialPersistence(getDb)
+  )
+  const nativeConfiguration = new NativeProviderConfigurationService(
+    new DesktopSettingsStorage(getDb()),
+    {
+      preferences: {
+        model: { type: 'string' },
+        approvalPolicy: { type: 'enum', values: ['ask', 'never'] },
+      },
+      readinessFields: [
+        'providerId',
+        'bindingId',
+        'workspaceBindingId',
+        'configured',
+        'executableDetected',
+      ],
+    }
+  )
+  let desktopHostRuntime: DesktopHostRuntime
+  const hostContributions = new DesktopHostContributionRuntime(async () => [])
+  desktopHostRuntime = new DesktopHostRuntime({
+    credentialStore: hostCredentialStore,
+    configuration: nativeConfiguration,
+    lifecycle: {
+      prepareConfiguration: async () => undefined,
+      loadContributions: () => hostContributions.load(),
+      connectHost: async () => {
+        const environment = getBundledHostRuntimeEnvironment()
+        const url = getBundledHostUrl()
+        if (environment && url) {
+          await desktopHostRuntime.connectLocal(url, environment)
+          return
+        }
+        const remoteUrl = configuredRemoteHostUrl()
+        if (remoteUrl?.startsWith('wss:')) await desktopHostRuntime.connectRemote(remoteUrl)
+      },
+      closeHost: () => hostContributions.dispose(),
+      expireBootstrap: expireBundledHostLaunch,
+    },
+    invokeContribution: (input) => hostContributions.invoke(input),
+    contributionRegistrations: () => hostContributions.registrations(),
+  })
+  registerNativeProviderConfigurationIpc(ipcMain, desktopHostRuntime)
+  registerHostManagementIpc(
+    ipcMain,
+    new RelayHostManagementClient({
+      baseUrl: () => {
+        const url = process.env.VOICECLAW_REMOTE_RELAY_URL ?? getTailnetUrl()
+        if (!url) throw new Error('relay_url_unavailable')
+        return url.replace(/^ws/, 'http').replace(/\/ws$/, '')
+      },
+      ownerCredential: () => {
+        const credential = getBundledRelayApiKey()
+        if (!credential) throw new Error('relay_owner_credential_unavailable')
+        return credential
+      },
+      credentialStore: hostCredentialStore,
+      credentialStored: async () => {
+        const remoteUrl = configuredRemoteHostUrl()
+        if (!remoteUrl?.startsWith('wss:')) throw new Error('secure_wss_required')
+        await desktopHostRuntime.connectRemote(remoteUrl)
+      },
+    })
+  )
+
   // App lifecycle / system integration
   ipcMain.handle('app:getLaunchAtLogin', () => isLaunchAtLoginEnabled())
   ipcMain.handle('app:setLaunchAtLogin', (_e, enabled: boolean) => {
@@ -88,9 +167,11 @@ export function registerIpcHandlers() {
         console.warn('[bundled-defaults] failed to re-apply gemini key', err)
       }
     }
-    serviceManager.restart('relay', () => buildRelayEnv()).catch((err) => {
-      console.warn('[bundled-defaults] relay restart failed', err)
-    })
+    serviceManager
+      .restart('relay', () => buildRelayEnv())
+      .catch((err) => {
+        console.warn('[bundled-defaults] relay restart failed', err)
+      })
     serviceManager.restart('openclawGateway').catch((err) => {
       console.warn('[bundled-defaults] openclaw restart failed', err)
     })
@@ -106,19 +187,16 @@ export function registerIpcHandlers() {
     telemetrySetOptedOut(optedOut)
     return telemetryIsOptedOut()
   })
-  ipcMain.handle(
-    'telemetry:capture',
-    (_e, event: string, props?: Record<string, unknown>) => {
-      telemetryCapture(event, props)
-    },
-  )
+  ipcMain.handle('telemetry:capture', (_e, event: string, props?: Record<string, unknown>) => {
+    telemetryCapture(event, props)
+  })
   ipcMain.handle(
     'telemetry:captureException',
-    (_e, err: { message: string, stack?: string }, context?: Record<string, unknown>) => {
+    (_e, err: { message: string; stack?: string }, context?: Record<string, unknown>) => {
       const error = new Error(err?.message ?? 'unknown')
       if (err?.stack) error.stack = err.stack
       telemetryCaptureException(error, context)
-    },
+    }
   )
 
   // Conversations
@@ -154,7 +232,7 @@ export function registerIpcHandlers() {
           (SELECT content FROM messages WHERE conversation_id = c.id ORDER BY created_at ASC LIMIT 1) as preview,
           (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) as message_count
         FROM conversations c
-        ORDER BY c.updated_at DESC`,
+        ORDER BY c.updated_at DESC`
       )
       .all()
   })
@@ -170,7 +248,7 @@ export function registerIpcHandlers() {
       .prepare(
         `SELECT a.path FROM message_attachments a
           JOIN messages m ON m.id = a.message_id
-          WHERE m.conversation_id = ? AND a.storage = 'file' AND a.path IS NOT NULL`,
+          WHERE m.conversation_id = ? AND a.storage = 'file' AND a.path IS NOT NULL`
       )
       .all(id) as { path: string }[]
     db.prepare('DELETE FROM conversation_summaries WHERE conversation_id = ?').run(id)
@@ -184,16 +262,14 @@ export function registerIpcHandlers() {
     db.prepare('UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?').run(
       title,
       Date.now(),
-      id,
+      id
     )
   })
 
   ipcMain.handle('db:deleteAllConversations', () => {
     const db = getDb()
     const orphanedFiles = db
-      .prepare(
-        "SELECT path FROM message_attachments WHERE storage = 'file' AND path IS NOT NULL",
-      )
+      .prepare("SELECT path FROM message_attachments WHERE storage = 'file' AND path IS NOT NULL")
       .all() as { path: string }[]
     db.prepare('DELETE FROM conversation_summaries').run()
     db.prepare('DELETE FROM messages').run()
@@ -209,14 +285,14 @@ export function registerIpcHandlers() {
       conversationId: number,
       role: string,
       content: string,
-      latency?: { sttLatencyMs?: number, llmLatencyMs?: number, ttsLatencyMs?: number },
-      providers?: { sttProvider?: string, llmProvider?: string, ttsProvider?: string },
+      latency?: { sttLatencyMs?: number; llmLatencyMs?: number; ttsLatencyMs?: number },
+      providers?: { sttProvider?: string; llmProvider?: string; ttsProvider?: string }
     ) => {
       const db = getDb()
       const now = Date.now()
       const result = db
         .prepare(
-          'INSERT INTO messages (conversation_id, role, content, created_at, stt_latency_ms, llm_latency_ms, tts_latency_ms, stt_provider, llm_provider, tts_provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO messages (conversation_id, role, content, created_at, stt_latency_ms, llm_latency_ms, tts_latency_ms, stt_provider, llm_provider, tts_provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         )
         .run(
           conversationId,
@@ -228,7 +304,7 @@ export function registerIpcHandlers() {
           latency?.ttsLatencyMs ?? null,
           providers?.sttProvider ?? null,
           providers?.llmProvider ?? null,
-          providers?.ttsProvider ?? null,
+          providers?.ttsProvider ?? null
         )
       db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(now, conversationId)
       return {
@@ -244,7 +320,7 @@ export function registerIpcHandlers() {
         llm_provider: providers?.llmProvider ?? null,
         tts_provider: providers?.ttsProvider ?? null,
       }
-    },
+    }
   )
 
   ipcMain.handle('db:getMessages', (_e, conversationId: number) => {
@@ -259,96 +335,93 @@ export function registerIpcHandlers() {
       return { ok: false as const, error: 'Invalid message id' }
     }
     const db = getDb()
-    const row = db
-      .prepare('SELECT conversation_id FROM messages WHERE id = ?')
-      .get(id) as { conversation_id: number } | undefined
+    const row = db.prepare('SELECT conversation_id FROM messages WHERE id = ?').get(id) as
+      | { conversation_id: number }
+      | undefined
     if (!row) return { ok: false as const, error: 'Message not found' }
     const orphanedFiles = db
       .prepare(
-        "SELECT path FROM message_attachments WHERE message_id = ? AND storage = 'file' AND path IS NOT NULL",
+        "SELECT path FROM message_attachments WHERE message_id = ? AND storage = 'file' AND path IS NOT NULL"
       )
       .all(id) as { path: string }[]
     const result = db.prepare('DELETE FROM messages WHERE id = ?').run(id)
     if (result.changes !== 1) return { ok: false as const, error: 'Delete affected no rows' }
     db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(
       Date.now(),
-      row.conversation_id,
+      row.conversation_id
     )
     for (const orphan of orphanedFiles) deleteAttachmentFile(orphan.path)
     return { ok: true as const }
   })
 
-  ipcMain.handle(
-    'db:attachToMessage',
-    (_e, messageId: number, input: AttachmentInput) => {
-      if (typeof messageId !== 'number' || !Number.isFinite(messageId) || messageId <= 0) {
-        return { ok: false as const, error: 'Invalid message id' }
-      }
-      const validation = validateAttachmentInput(input)
-      if (!validation.ok) return validation
-      const db = getDb()
-      const exists = db
-        .prepare('SELECT id FROM messages WHERE id = ?')
-        .get(messageId) as { id: number } | undefined
-      if (!exists) return { ok: false as const, error: 'Message not found' }
-      const now = Date.now()
-      const inline = shouldStoreInline(input.byteSize)
-      let storagePath: string | null = null
-      let storageData: string | null = null
-      if (inline) {
-        storageData = input.base64
-      } else {
-        try {
-          storagePath = writeAttachmentToDisk(app.getPath('userData'), input.base64, input.mime)
-        } catch (err) {
-          return {
-            ok: false as const,
-            error: err instanceof Error ? err.message : 'Failed to write attachment to disk',
-          }
+  ipcMain.handle('db:attachToMessage', (_e, messageId: number, input: AttachmentInput) => {
+    if (typeof messageId !== 'number' || !Number.isFinite(messageId) || messageId <= 0) {
+      return { ok: false as const, error: 'Invalid message id' }
+    }
+    const validation = validateAttachmentInput(input)
+    if (!validation.ok) return validation
+    const db = getDb()
+    const exists = db.prepare('SELECT id FROM messages WHERE id = ?').get(messageId) as
+      | { id: number }
+      | undefined
+    if (!exists) return { ok: false as const, error: 'Message not found' }
+    const now = Date.now()
+    const inline = shouldStoreInline(input.byteSize)
+    let storagePath: string | null = null
+    let storageData: string | null = null
+    if (inline) {
+      storageData = input.base64
+    } else {
+      try {
+        storagePath = writeAttachmentToDisk(app.getPath('userData'), input.base64, input.mime)
+      } catch (err) {
+        return {
+          ok: false as const,
+          error: err instanceof Error ? err.message : 'Failed to write attachment to disk',
         }
       }
-      const result = db
-        .prepare(
-          `INSERT INTO message_attachments
+    }
+    const result = db
+      .prepare(
+        `INSERT INTO message_attachments
             (message_id, kind, mime, storage, data, path, width, height, byte_size, original_name, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          messageId,
-          input.kind,
-          input.mime,
-          inline ? 'inline' : 'file',
-          storageData,
-          storagePath,
-          input.width ?? null,
-          input.height ?? null,
-          input.byteSize,
-          input.originalName ?? null,
-          now,
-        )
-      const record: AttachmentRecord = {
-        id: result.lastInsertRowid as number,
-        message_id: messageId,
-        kind: input.kind,
-        mime: input.mime,
-        storage: inline ? 'inline' : 'file',
-        data: storageData,
-        path: storagePath,
-        width: input.width ?? null,
-        height: input.height ?? null,
-        byte_size: input.byteSize,
-        original_name: input.originalName ?? null,
-        created_at: now,
-      }
-      return { ok: true as const, attachment: record }
-    },
-  )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        messageId,
+        input.kind,
+        input.mime,
+        inline ? 'inline' : 'file',
+        storageData,
+        storagePath,
+        input.width ?? null,
+        input.height ?? null,
+        input.byteSize,
+        input.originalName ?? null,
+        now
+      )
+    const record: AttachmentRecord = {
+      id: result.lastInsertRowid as number,
+      message_id: messageId,
+      kind: input.kind,
+      mime: input.mime,
+      storage: inline ? 'inline' : 'file',
+      data: storageData,
+      path: storagePath,
+      width: input.width ?? null,
+      height: input.height ?? null,
+      byte_size: input.byteSize,
+      original_name: input.originalName ?? null,
+      created_at: now,
+    }
+    return { ok: true as const, attachment: record }
+  })
 
   ipcMain.handle('db:getAttachmentsForMessage', (_e, messageId: number) => {
     const db = getDb()
     const rows = db
       .prepare(
-        'SELECT * FROM message_attachments WHERE message_id = ? ORDER BY created_at ASC, id ASC',
+        'SELECT * FROM message_attachments WHERE message_id = ? ORDER BY created_at ASC, id ASC'
       )
       .all(messageId) as AttachmentRecord[]
     return rows.map(hydrateAttachmentData)
@@ -361,7 +434,7 @@ export function registerIpcHandlers() {
         `SELECT a.* FROM message_attachments a
           JOIN messages m ON m.id = a.message_id
           WHERE m.conversation_id = ?
-          ORDER BY a.created_at ASC, a.id ASC`,
+          ORDER BY a.created_at ASC, a.id ASC`
       )
       .all(conversationId) as AttachmentRecord[]
     return rows.map(hydrateAttachmentData)
@@ -433,13 +506,13 @@ export function registerIpcHandlers() {
   ipcMain.handle('db:setSetting', (_e, key: string, value: string) => {
     const db = getDb()
     db.prepare(
-      'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?',
+      'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?'
     ).run(key, value, value)
   })
 
   ipcMain.handle('db:getAllSettings', () => {
     const db = getDb()
-    const rows = db.prepare('SELECT * FROM settings').all() as { key: string, value: string }[]
+    const rows = db.prepare('SELECT * FROM settings').all() as { key: string; value: string }[]
     return Object.fromEntries(rows.map((r) => [r.key, r.value]))
   })
 
@@ -448,7 +521,7 @@ export function registerIpcHandlers() {
   ipcMain.handle(
     'onboarding:updateStep',
     (_e, step: WizardStepId, patch: OnboardingPayload | undefined) =>
-      updateOnboardingStep(step, patch ?? {}),
+      updateOnboardingStep(step, patch ?? {})
   )
   ipcMain.handle('onboarding:complete', () => markOnboardingComplete())
   ipcMain.handle('onboarding:reset', async () => {
@@ -461,8 +534,7 @@ export function registerIpcHandlers() {
           cancelId: 1,
           title: 'Restart onboarding?',
           message: 'Restart onboarding from step 1?',
-          detail:
-            'Saved API keys and sign-in remain in place — only the wizard cursor resets.',
+          detail: 'Saved API keys and sign-in remain in place — only the wizard cursor resets.',
         })
       : { response: 0 }
     if (result.response !== 0) return { ok: false }
@@ -491,40 +563,39 @@ export function registerIpcHandlers() {
 
   // Provider keys + smoke test
   ipcMain.handle('provider:listConfigured', () => listConfiguredProviders())
-  ipcMain.handle(
-    'provider:validateAndSave',
-    async (_e, provider: ProviderId, key: string) => {
-      const result = await validateProviderKey(provider, key)
-      if (!result.ok) return result
-      const previous = getProviderKey(provider)
-      try {
-        setProviderKey(provider, key)
-      } catch (err) {
-        return {
-          ok: false as const,
-          error: err instanceof Error ? err.message : 'Could not save key.',
-        }
+  ipcMain.handle('provider:validateAndSave', async (_e, provider: ProviderId, key: string) => {
+    const result = await validateProviderKey(provider, key)
+    if (!result.ok) return result
+    const previous = getProviderKey(provider)
+    try {
+      setProviderKey(provider, key)
+    } catch (err) {
+      return {
+        ok: false as const,
+        error: err instanceof Error ? err.message : 'Could not save key.',
       }
-      if (previous !== key) {
-        serviceManager.restart('relay', () => buildRelayEnv()).catch((err) => {
+    }
+    if (previous !== key) {
+      serviceManager
+        .restart('relay', () => buildRelayEnv())
+        .catch((err) => {
           console.warn('[relay] restart after provider key save failed', err)
         })
-        if (provider === 'gemini') {
-          try {
-            const changed = applyGeminiKeyToOpenClawConfig(key)
-            if (changed) {
-              serviceManager.restart('openclawGateway').catch((err) => {
-                console.warn('[openclaw] restart after gemini key save failed', err)
-              })
-            }
-          } catch (err) {
-            console.warn('[openclaw] failed to apply gemini key to config', err)
+      if (provider === 'gemini') {
+        try {
+          const changed = applyGeminiKeyToOpenClawConfig(key)
+          if (changed) {
+            serviceManager.restart('openclawGateway').catch((err) => {
+              console.warn('[openclaw] restart after gemini key save failed', err)
+            })
           }
+        } catch (err) {
+          console.warn('[openclaw] failed to apply gemini key to config', err)
         }
       }
-      return { ok: true as const }
-    },
-  )
+    }
+    return { ok: true as const }
+  })
   ipcMain.handle('provider:geminiSmoke', async (_e, prompt: string) => {
     return geminiSmokeCall(prompt)
   })
@@ -543,29 +614,25 @@ export function registerIpcHandlers() {
       const provider = providerForVoice(saved.voice) ?? getActiveProvider()
       setVoiceForProviderSync(provider, saved.voice)
     }
-    serviceManager.restart('relay', () => buildRelayEnv()).catch((err) => {
-      console.warn('[relay] restart after identity save failed', err)
-    })
+    serviceManager
+      .restart('relay', () => buildRelayEnv())
+      .catch((err) => {
+        console.warn('[relay] restart after identity save failed', err)
+      })
     return saved
   })
-  ipcMain.handle(
-    'identity:speakPreview',
-    async (_e, params: { voice: string; text: string }) => {
-      const apiKey = getProviderKey('gemini')
-      if (!apiKey) return { ok: false as const, error: 'No Gemini key configured.' }
-      return speakGreetingPreview({ apiKey, voice: params.voice, text: params.text })
-    },
-  )
+  ipcMain.handle('identity:speakPreview', async (_e, params: { voice: string; text: string }) => {
+    const apiKey = getProviderKey('gemini')
+    if (!apiKey) return { ok: false as const, error: 'No Gemini key configured.' }
+    return speakGreetingPreview({ apiKey, voice: params.voice, text: params.text })
+  })
 
   // Static voice preview used by the Settings voice picker. The clips
   // ship with the app under resources/voice-previews/<provider>/ — this
   // handler never hits the network and does not need an API key.
-  ipcMain.handle(
-    'identity:getVoicePreview',
-    async (_e, params: { voice: string }) => {
-      return getBundledVoicePreview({ voice: params.voice })
-    },
-  )
+  ipcMain.handle('identity:getVoicePreview', async (_e, params: { voice: string }) => {
+    return getBundledVoicePreview({ voice: params.voice })
+  })
 
   // Logs
   ipcMain.handle('logs:reveal', async () => {
@@ -589,9 +656,12 @@ export function registerIpcHandlers() {
     return { ...s, currentVersion: app.getVersion() }
   })
   ipcMain.handle('updates:checkNow', () => checkForUpdatesNow())
-  ipcMain.handle('updates:installNow', (_e, source: 'banner' | 'settings' | 'tray' = 'settings') => {
-    installNow(source)
-  })
+  ipcMain.handle(
+    'updates:installNow',
+    (_e, source: 'banner' | 'settings' | 'tray' = 'settings') => {
+      installNow(source)
+    }
+  )
 
   ipcMain.handle('shell:openExternal', (_e, url: string) => {
     if (typeof url === 'string' && /^https?:\/\//.test(url)) {
@@ -686,6 +756,20 @@ export function registerIpcHandlers() {
       return { ok: false, error: err instanceof Error ? err.message : 'Connection failed' }
     }
   })
+
+  return desktopHostRuntime
+}
+
+function configuredRemoteHostUrl(): string | undefined {
+  const configured = process.env.VOICECLAW_REMOTE_RELAY_URL?.trim()
+  if (!configured) return undefined
+  const url = new URL(configured)
+  if (url.protocol !== 'https:' && url.protocol !== 'wss:') return undefined
+  url.protocol = 'wss:'
+  url.pathname = '/host/ws'
+  url.search = ''
+  url.hash = ''
+  return url.toString()
 }
 
 // ---------------------------------------------------------------------------

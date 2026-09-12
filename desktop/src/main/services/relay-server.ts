@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { existsSync } from 'fs'
 import { spawnSync } from 'node:child_process'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { networkInterfaces } from 'node:os'
 import { join } from 'path'
@@ -31,6 +32,14 @@ export type TailscaleTlsHandle = {
 // cache as `null` so we don't shell out repeatedly mid-session.
 let tlsHandle: TailscaleTlsHandle | null | undefined = undefined
 
+type BundledHostLaunch = {
+  stackId: string
+  hostId: string
+  secret: string
+}
+
+let bundledHostLaunch: BundledHostLaunch | undefined
+
 export function getRelayTlsHandle(): TailscaleTlsHandle | null {
   return tlsHandle ?? null
 }
@@ -40,7 +49,10 @@ export function __resetRelayTlsHandleForTests(): void {
   tlsHandle = undefined
 }
 
-function runTailscale(args: string[], timeoutMs: number): { ok: boolean; stdout: string; stderr: string } {
+function runTailscale(
+  args: string[],
+  timeoutMs: number
+): { ok: boolean; stdout: string; stderr: string } {
   for (const bin of TAILSCALE_BIN_CANDIDATES) {
     try {
       const r = spawnSync(bin, args, { encoding: 'utf-8', timeout: timeoutMs })
@@ -68,14 +80,17 @@ function runTailscale(args: string[], timeoutMs: number): { ok: boolean; stdout:
 // will be picked up automatically on next boot.
 export function ensureTailscaleTlsHandle(
   userDataDir: string,
-  options: { runner?: typeof runTailscale } = {},
+  options: { runner?: typeof runTailscale } = {}
 ): TailscaleTlsHandle | null {
   if (tlsHandle !== undefined) return tlsHandle
   const runner = options.runner ?? runTailscale
   try {
     const status = runner(['status', '--json'], 4_000)
     if (!status.ok || !status.stdout) {
-      console.warn('[relay-tls] tailscale status failed; falling back to ws://', status.stderr.trim())
+      console.warn(
+        '[relay-tls] tailscale status failed; falling back to ws://',
+        status.stderr.trim()
+      )
       tlsHandle = null
       return null
     }
@@ -98,14 +113,11 @@ export function ensureTailscaleTlsHandle(
     // tailscale cert is idempotent — exits 0 if a valid cert already
     // exists. The provisioning call can take up to ~30s the first time
     // (LE issuance) so we cap generously.
-    const cert = runner(
-      ['cert', '--cert-file', certPath, '--key-file', keyPath, dnsName],
-      60_000,
-    )
+    const cert = runner(['cert', '--cert-file', certPath, '--key-file', keyPath, dnsName], 60_000)
     if (!cert.ok || !existsSync(certPath) || !existsSync(keyPath)) {
       console.warn(
         '[relay-tls] tailscale cert failed; falling back to ws://',
-        cert.stderr.trim() || cert.stdout.trim(),
+        cert.stderr.trim() || cert.stdout.trim()
       )
       tlsHandle = null
       return null
@@ -120,7 +132,12 @@ export function ensureTailscaleTlsHandle(
   }
 }
 
-export async function startBundledRelayServer(): Promise<void> {
+export async function startBundledRelayServer(
+  options: {
+    createBootstrapSecret?: () => string
+    createStackId?: () => string
+  } = {}
+): Promise<void> {
   const spec = resolveRelaySpawn()
   if (!spec) {
     console.info('[relay] no executable script available; skipping spawn')
@@ -128,14 +145,19 @@ export async function startBundledRelayServer(): Promise<void> {
   }
 
   if (await isExternalRelayRunning(PREFERRED_RELAY_PORT)) {
-    console.info(
-      `[relay] external relay already serving :${PREFERRED_RELAY_PORT}; skipping spawn`,
-    )
+    console.info(`[relay] external relay already serving :${PREFERRED_RELAY_PORT}; skipping spawn`)
     markAllocatedPort('relay', PREFERRED_RELAY_PORT)
     return
   }
 
   const port = await allocatePort('relay')
+  expireBundledHostLaunch()
+  const stackId = (options.createStackId ?? randomUUID)()
+  bundledHostLaunch = {
+    stackId,
+    hostId: `local-host-${stackId}`,
+    secret: (options.createBootstrapSecret ?? (() => randomBytes(32).toString('base64url')))(),
+  }
 
   // Best-effort: get a Tailscale-issued LE cert so the relay listens on
   // wss:// (which iOS trusts natively). Failure leaves us on ws:// — the
@@ -153,15 +175,35 @@ export async function startBundledRelayServer(): Promise<void> {
     env.ELECTRON_RUN_AS_NODE = '1'
   }
 
-  await serviceManager.start({
-    name: 'relay',
-    command: spec.command,
-    args: spec.args,
-    env,
-    port,
-    healthCheckUrl: `http://127.0.0.1:${port}/health`,
-    logFile: 'relay-server.log',
-  })
+  try {
+    await serviceManager.start({
+      name: 'relay',
+      command: spec.command,
+      args: spec.args,
+      env,
+      port,
+      healthCheckUrl: `http://127.0.0.1:${port}/health`,
+      logFile: 'relay-server.log',
+    })
+  } catch (error) {
+    expireBundledHostLaunch()
+    throw error
+  }
+}
+
+export function getBundledHostRuntimeEnvironment(): NodeJS.ProcessEnv | null {
+  return bundledHostLaunch ? launchEnvironment(bundledHostLaunch) : null
+}
+
+export function getBundledHostUrl(): string | null {
+  const clientUrl =
+    getTailnetUrl() ??
+    (getAllocatedPorts().relay ? `ws://127.0.0.1:${getAllocatedPorts().relay}/ws` : null)
+  return clientUrl?.replace(/\/ws$/, '/host/ws') ?? null
+}
+
+export function expireBundledHostLaunch(): void {
+  bundledHostLaunch = undefined
 }
 
 export function resolveRelaySpawn(): RelaySpawnSpec | null {
@@ -213,6 +255,7 @@ export function resolveDevSourceRelay(): RelaySpawnSpec | null {
 
 export function buildRelayEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = forwardedEnv()
+  if (bundledHostLaunch) Object.assign(env, launchEnvironment(bundledHostLaunch))
   for (const provider of Object.keys(PROVIDER_ENV_KEYS) as ProviderId[]) {
     const envKey = PROVIDER_ENV_KEYS[provider]
     if (env[envKey]) continue
@@ -240,14 +283,15 @@ export function buildRelayEnv(): NodeJS.ProcessEnv {
   // close the open-WS-on-LAN gap; we re-open it here because the desktop also
   // ensures RELAY_API_KEY is provisioned in buildRelayEnv (above), so the
   // tailnet socket is only reachable with the bundled key.
-  if (!env.RELAY_BIND_HOST) env.RELAY_BIND_HOST = "0.0.0.0"
+  if (!env.RELAY_BIND_HOST) env.RELAY_BIND_HOST = '0.0.0.0'
   // Per-device token validation runs through the localhost bridge owned by
   // the desktop main process. Missing env vars => the relay falls back to
   // the master-key path only (which is what standalone `yarn dev` wants).
   const bridge = getDeviceTokenBridge()
   if (bridge) {
     if (!env.VOICECLAW_DEVICE_TOKEN_CHECK_URL) env.VOICECLAW_DEVICE_TOKEN_CHECK_URL = bridge.url
-    if (!env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE) env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE = bridge.nonce
+    if (!env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE)
+      env.VOICECLAW_DEVICE_TOKEN_CHECK_NONCE = bridge.nonce
   }
   const tls = getRelayTlsHandle()
   if (tls) {
@@ -255,6 +299,14 @@ export function buildRelayEnv(): NodeJS.ProcessEnv {
     if (!env.RELAY_TLS_KEY) env.RELAY_TLS_KEY = tls.keyPath
   }
   return env
+}
+
+function launchEnvironment(launch: BundledHostLaunch): NodeJS.ProcessEnv {
+  return {
+    VOICECLAW_LOCAL_HOST_BOOTSTRAP: launch.secret,
+    VOICECLAW_LOCAL_HOST_STACK_ID: launch.stackId,
+    VOICECLAW_LOCAL_HOST_ID: launch.hostId,
+  }
 }
 
 // Build the ws:// URL a paired mobile device should connect to. The relay
@@ -268,7 +320,7 @@ export function buildRelayEnv(): NodeJS.ProcessEnv {
 // fully offline laptop with no interfaces up).
 export function getTailnetUrl(
   interfacesFn: () => ReturnType<typeof networkInterfaces> = networkInterfaces,
-  tlsFn: () => TailscaleTlsHandle | null = getRelayTlsHandle,
+  tlsFn: () => TailscaleTlsHandle | null = getRelayTlsHandle
 ): string | null {
   const port = getAllocatedPorts().relay ?? PREFERRED_RELAY_PORT
   const tls = tlsFn()
@@ -278,9 +330,7 @@ export function getTailnetUrl(
   return `ws://${host}:${port}/ws`
 }
 
-function pickPairingHost(
-  ifaces: ReturnType<typeof networkInterfaces>,
-): string | null {
+function pickPairingHost(ifaces: ReturnType<typeof networkInterfaces>): string | null {
   let lanFallback: string | null = null
   for (const name of Object.keys(ifaces)) {
     const list = ifaces[name]
@@ -364,7 +414,7 @@ function isExternalRelayRunning(port: number): Promise<boolean> {
       (res) => {
         res.resume()
         resolve(res.statusCode === 200)
-      },
+      }
     )
     req.on('error', () => resolve(false))
     req.on('timeout', () => {
