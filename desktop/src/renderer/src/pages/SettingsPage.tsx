@@ -22,13 +22,9 @@ import {
   providerForModel,
   setVoiceForProvider,
 } from '../lib/voice-prefs'
-import {
-  captureRenderer,
-  isOptedOutRenderer,
-  setOptedOutRenderer,
-} from '../lib/telemetry'
+import { captureRenderer, isOptedOutRenderer, setOptedOutRenderer } from '../lib/telemetry'
 
-const GEMINI_VOICE_LABELS: Record<typeof GEMINI_VOICES[number], string> = {
+const GEMINI_VOICE_LABELS: Record<(typeof GEMINI_VOICES)[number], string> = {
   Puck: 'Puck (M)',
   Charon: 'Charon (M)',
   Kore: 'Kore (F)',
@@ -39,7 +35,7 @@ const GEMINI_VOICE_LABELS: Record<typeof GEMINI_VOICES[number], string> = {
   Zephyr: 'Zephyr (F)',
 }
 
-const XAI_VOICE_LABELS: Record<typeof XAI_VOICES[number], string> = {
+const XAI_VOICE_LABELS: Record<(typeof XAI_VOICES)[number], string> = {
   eve: 'Eve (F)',
   ara: 'Ara (F)',
   rex: 'Rex (M)',
@@ -47,7 +43,7 @@ const XAI_VOICE_LABELS: Record<typeof XAI_VOICES[number], string> = {
   leo: 'Leo (M)',
 }
 
-const OPENAI_VOICE_LABELS: Record<typeof OPENAI_VOICES[number], string> = {
+const OPENAI_VOICE_LABELS: Record<(typeof OPENAI_VOICES)[number], string> = {
   marin: 'Marin (F)',
   cedar: 'Cedar (M)',
   alloy: 'Alloy (N)',
@@ -70,8 +66,8 @@ const DEFAULT_REALTIME_MODEL: RealtimeModel = 'gemini-3.1-flash-live-preview'
 // Mirror of the relay-server VoiceMode / AgentBackend enums. Persisted in
 // the desktop settings KV; the literal strings cross the wire as
 // session.config.voiceMode / session.config.agentBackend.
-type VoiceMode = 'direct' | 'operator' | 'supervisor'
-const VOICE_MODES: readonly VoiceMode[] = ['direct', 'operator', 'supervisor']
+type VoiceMode = 'direct' | 'operator' | 'supervisor' | 'stt-tts-harness'
+const VOICE_MODES: readonly VoiceMode[] = ['direct', 'operator', 'supervisor', 'stt-tts-harness']
 const DEFAULT_VOICE_MODE: VoiceMode = 'direct'
 
 type AgentBackend = 'pi' | 'openai' | 'hermes'
@@ -155,6 +151,11 @@ export function SettingsPage() {
   // the relay in every session.config.
   const [voiceMode, setVoiceMode] = useState<VoiceMode>(DEFAULT_VOICE_MODE)
   const [agentBackend, setAgentBackend] = useState<AgentBackend>(DEFAULT_AGENT_BACKEND)
+  // Explicit STT/TTS Harness selection. The binding belongs to the Relay; the
+  // Provider and Workspace must match its Active Host Assignment.
+  const [harnessProviderId, setHarnessProviderId] = useState('')
+  const [harnessWorkspaceBindingId, setHarnessWorkspaceBindingId] = useState('')
+  const [harnessBindingId, setHarnessBindingId] = useState('')
 
   // Per-provider realtime API keys (Keychain-backed via main process).
   // We never read the secret back into the UI — only the list of which
@@ -224,6 +225,9 @@ export function SettingsPage() {
       setVoiceMode(normalizeVoiceMode(vm))
       const ab = await getSetting('agent_backend')
       setAgentBackend(normalizeAgentBackend(ab))
+      setHarnessProviderId((await getSetting('harness_provider_id')) ?? '')
+      setHarnessWorkspaceBindingId((await getSetting('harness_workspace_binding_id')) ?? '')
+      setHarnessBindingId((await getSetting('harness_binding_id')) ?? '')
       const vol = await getSetting('realtime_volume')
       if (vol) setVolume(parseFloat(vol))
       const inDev = await getSetting('input_device_id')
@@ -279,7 +283,10 @@ export function SettingsPage() {
   useEffect(() => {
     const api = window.electronAPI?.updates
     if (!api) return
-    api.getState().then(setUpdateState).catch(() => {})
+    api
+      .getState()
+      .then(setUpdateState)
+      .catch(() => {})
     const remove = api.onStateChanged(setUpdateState)
     return remove
   }, [])
@@ -289,49 +296,77 @@ export function SettingsPage() {
     setSetting(key, value)
   }, [])
 
-  const updateTavilyKey = useCallback((v: string) => {
-    setTavilyKey(v)
-    if (loadedRef.current) {
-      save('tavily_api_key', v)
-      if (v && !tavilyKey) {
-        captureRenderer('provider_key_saved', { provider: 'tavily' })
+  const updateTavilyKey = useCallback(
+    (v: string) => {
+      setTavilyKey(v)
+      if (loadedRef.current) {
+        save('tavily_api_key', v)
+        if (v && !tavilyKey) {
+          captureRenderer('provider_key_saved', { provider: 'tavily' })
+        }
       }
-    }
-  }, [save, tavilyKey])
+    },
+    [save, tavilyKey]
+  )
 
   const toggleTavilyEnabled = useCallback((v: boolean) => {
     setTavilyEnabled(v)
     setSetting('tavily_enabled', v ? 'true' : 'false')
   }, [])
 
-  const updateModel = useCallback((v: RealtimeModel) => {
-    setModel(v)
-    if (loadedRef.current) save('realtime_model', v)
-    const nextProvider = providerForModel(v)
-    if (isVoiceForProvider(nextProvider, voice)) return
-    void (async () => {
-      const restored = await getVoiceForProvider(nextProvider)
-      setVoice(restored)
-      if (loadedRef.current) await setVoiceForProvider(nextProvider, restored)
-    })()
-  }, [save, voice])
+  const updateModel = useCallback(
+    (v: RealtimeModel) => {
+      setModel(v)
+      if (loadedRef.current) save('realtime_model', v)
+      const nextProvider = providerForModel(v)
+      if (isVoiceForProvider(nextProvider, voice)) return
+      void (async () => {
+        const restored = await getVoiceForProvider(nextProvider)
+        setVoice(restored)
+        if (loadedRef.current) await setVoiceForProvider(nextProvider, restored)
+      })()
+    },
+    [save, voice]
+  )
 
-  const updateVoice = useCallback((v: string) => {
-    setVoice(v)
-    if (loadedRef.current) {
-      void setVoiceForProvider(providerForModel(model), v)
-    }
-  }, [model])
+  const updateVoice = useCallback(
+    (v: string) => {
+      setVoice(v)
+      if (loadedRef.current) {
+        void setVoiceForProvider(providerForModel(model), v)
+      }
+    },
+    [model]
+  )
 
-  const updateVoiceMode = useCallback((v: VoiceMode) => {
-    setVoiceMode(v)
-    if (loadedRef.current) save('voice_mode', v)
-  }, [save])
+  const updateVoiceMode = useCallback(
+    (v: VoiceMode) => {
+      setVoiceMode(v)
+      if (loadedRef.current) save('voice_mode', v)
+    },
+    [save]
+  )
 
-  const updateAgentBackend = useCallback((v: AgentBackend) => {
-    setAgentBackend(v)
-    if (loadedRef.current) save('agent_backend', v)
-  }, [save])
+  const updateAgentBackend = useCallback(
+    (v: AgentBackend) => {
+      setAgentBackend(v)
+      if (loadedRef.current) save('agent_backend', v)
+    },
+    [save]
+  )
+
+  const updateHarness = useCallback(
+    (
+      key: 'harness_provider_id' | 'harness_workspace_binding_id' | 'harness_binding_id',
+      v: string
+    ) => {
+      if (key === 'harness_provider_id') setHarnessProviderId(v)
+      else if (key === 'harness_workspace_binding_id') setHarnessWorkspaceBindingId(v)
+      else setHarnessBindingId(v)
+      if (loadedRef.current) save(key, v)
+    },
+    [save]
+  )
 
   // Stop + release any in-flight preview clip on unmount.
   useEffect(() => {
@@ -401,20 +436,29 @@ export function SettingsPage() {
     }
   }, [])
 
-  const updateVolume = useCallback((v: number) => {
-    setVolume(v)
-    if (loadedRef.current) save('realtime_volume', String(v))
-  }, [save])
+  const updateVolume = useCallback(
+    (v: number) => {
+      setVolume(v)
+      if (loadedRef.current) save('realtime_volume', String(v))
+    },
+    [save]
+  )
 
-  const updateInputDevice = useCallback((v: string) => {
-    setInputDeviceId(v)
-    if (loadedRef.current) save('input_device_id', v)
-  }, [save])
+  const updateInputDevice = useCallback(
+    (v: string) => {
+      setInputDeviceId(v)
+      if (loadedRef.current) save('input_device_id', v)
+    },
+    [save]
+  )
 
-  const updateOutputDevice = useCallback((v: string) => {
-    setOutputDeviceId(v)
-    if (loadedRef.current) save('output_device_id', v)
-  }, [save])
+  const updateOutputDevice = useCallback(
+    (v: string) => {
+      setOutputDeviceId(v)
+      if (loadedRef.current) save('output_device_id', v)
+    },
+    [save]
+  )
 
   const toggleCallBar = useCallback((v: boolean) => {
     setCallBarEnabled(v)
@@ -452,7 +496,7 @@ export function SettingsPage() {
         })
         .catch((err) => console.warn('[settings] identity save failed', err))
     },
-    [agentName, agentDescription, voice],
+    [agentName, agentDescription, voice]
   )
 
   const updateAgentName = useCallback(
@@ -460,7 +504,7 @@ export function SettingsPage() {
       setAgentName(v)
       persistIdentity({ name: v })
     },
-    [persistIdentity],
+    [persistIdentity]
   )
 
   const updateAgentDescription = useCallback(
@@ -468,7 +512,7 @@ export function SettingsPage() {
       setAgentDescription(v)
       persistIdentity({ description: v })
     },
-    [persistIdentity],
+    [persistIdentity]
   )
 
   const toggleTelemetry = useCallback(async (v: boolean) => {
@@ -535,17 +579,16 @@ export function SettingsPage() {
   const outputDevices = audioDevices.filter((d) => d.kind === 'audiooutput')
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
         {/* Devices */}
         <DevicesCard />
 
         {/* Identity */}
-        <Card className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-foreground">Agent Identity</h3>
+        <Card className="space-y-4 p-4">
+          <h3 className="text-foreground text-sm font-semibold">Agent Identity</h3>
           <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Name</label>
+            <label className="text-muted-foreground text-xs">Name</label>
             <Input
               value={agentName}
               onChange={(e) => updateAgentName(e.target.value)}
@@ -553,40 +596,40 @@ export function SettingsPage() {
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Description</label>
+            <label className="text-muted-foreground text-xs">Description</label>
             <textarea
               value={agentDescription}
               onChange={(e) => updateAgentDescription(e.target.value)}
               placeholder="Friendly, calm, helps me stay on top of things."
               rows={2}
-              className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm leading-snug outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              className="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:ring-ring w-full resize-none rounded-md border px-3 py-2 text-sm leading-snug outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
             />
-            <p className="text-[11px] text-muted-foreground">
-              Used in the agent's system prompt. Saved as IDENTITY.md in the bundled openclaw workspace.
+            <p className="text-muted-foreground text-[11px]">
+              Used in the agent's system prompt. Saved as IDENTITY.md in the bundled openclaw
+              workspace.
             </p>
           </div>
         </Card>
 
         {/* Web Search */}
-        <Card className="p-4 space-y-4">
+        <Card className="space-y-4 p-4">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h3 className="text-sm font-semibold text-foreground">Web Search</h3>
-              <p className="text-xs text-muted-foreground mt-1">
+              <h3 className="text-foreground text-sm font-semibold">Web Search</h3>
+              <p className="text-muted-foreground mt-1 text-xs">
                 When enabled, the assistant gets a fast{' '}
-                <code className="rounded bg-muted px-1 py-0.5">web_search</code> tool
-                (Tavily) for quick public-web lookups (typically 1-3s) — much faster
-                than going through the brain. Get a key at{' '}
-                <span className="text-foreground">tavily.com</span>.
+                <code className="bg-muted rounded px-1 py-0.5">web_search</code> tool (Tavily) for
+                quick public-web lookups (typically 1-3s) — much faster than going through the
+                brain. Get a key at <span className="text-foreground">tavily.com</span>.
               </p>
             </div>
             <Toggle checked={tavilyEnabled} onChange={toggleTavilyEnabled} />
           </div>
 
           <div className={`space-y-1.5 ${tavilyEnabled ? '' : 'opacity-50'}`}>
-            <label className="text-xs text-muted-foreground">Tavily API Key</label>
+            <label className="text-muted-foreground text-xs">Tavily API Key</label>
             <div className="flex gap-2">
-              <div className="flex-1 relative">
+              <div className="relative flex-1">
                 <Input
                   type={showTavilyKey ? 'text' : 'password'}
                   value={tavilyKey}
@@ -597,13 +640,12 @@ export function SettingsPage() {
                 />
                 <button
                   onClick={() => setShowTavilyKey(!showTavilyKey)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                >
+                  className="text-muted-foreground hover:text-foreground absolute top-1/2 right-2 -translate-y-1/2">
                   {showTavilyKey ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
             </div>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-muted-foreground text-[11px]">
               {!tavilyEnabled
                 ? 'web_search disabled. Key is kept for when you re-enable.'
                 : tavilyKey
@@ -624,12 +666,50 @@ export function SettingsPage() {
         {/* Voice Mode */}
         <VoiceModeCard mode={voiceMode} onSelect={updateVoiceMode} />
 
+        {voiceMode === 'stt-tts-harness' && (
+          <Card className="space-y-4 p-4">
+            <div>
+              <h3 className="text-foreground text-sm font-semibold">STT/TTS Harness binding</h3>
+              <p className="text-muted-foreground mt-1 text-xs">
+                These must match the Relay&apos;s Active Host Assignment. A call does not start
+                until all three are set.
+              </p>
+            </div>
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-muted-foreground text-xs">Provider ID</label>
+                <Input
+                  value={harnessProviderId}
+                  onChange={(e) => updateHarness('harness_provider_id', e.target.value)}
+                  placeholder="codex"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-muted-foreground text-xs">Workspace Binding ID</label>
+                <Input
+                  value={harnessWorkspaceBindingId}
+                  onChange={(e) => updateHarness('harness_workspace_binding_id', e.target.value)}
+                  placeholder="workspace-1"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-muted-foreground text-xs">Binding ID</label>
+                <Input
+                  value={harnessBindingId}
+                  onChange={(e) => updateHarness('harness_binding_id', e.target.value)}
+                  placeholder="binding-1"
+                />
+              </div>
+            </div>
+          </Card>
+        )}
+
         {/* Agent */}
         <AgentBackendCard backend={agentBackend} onSelect={updateAgentBackend} />
 
         {/* Voice */}
-        <Card className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-foreground">Voice</h3>
+        <Card className="space-y-4 p-4">
+          <h3 className="text-foreground text-sm font-semibold">Voice</h3>
           <div className="grid grid-cols-2 gap-1.5">
             {(providerForModel(model) === 'gemini'
               ? GEMINI_VOICES
@@ -638,26 +718,21 @@ export function SettingsPage() {
                 : XAI_VOICES
             ).map((v) => {
               const provider = providerForModel(model)
-              const label = provider === 'gemini'
-                ? GEMINI_VOICE_LABELS[v as typeof GEMINI_VOICES[number]]
-                : provider === 'openai'
-                  ? OPENAI_VOICE_LABELS[v as typeof OPENAI_VOICES[number]]
-                  : XAI_VOICE_LABELS[v as typeof XAI_VOICES[number]]
+              const label =
+                provider === 'gemini'
+                  ? GEMINI_VOICE_LABELS[v as (typeof GEMINI_VOICES)[number]]
+                  : provider === 'openai'
+                    ? OPENAI_VOICE_LABELS[v as (typeof OPENAI_VOICES)[number]]
+                    : XAI_VOICE_LABELS[v as (typeof XAI_VOICES)[number]]
               const selected = voice === v
               const isPlaying = previewing === v
               return (
                 <div
                   key={v}
-                  className={`flex items-stretch gap-1 rounded-md border transition-colors
-                    ${selected ? 'border-primary bg-accent' : 'border-input'}
-                  `}
-                >
+                  className={`flex items-stretch gap-1 rounded-md border transition-colors ${selected ? 'border-primary bg-accent' : 'border-input'} `}>
                   <button
                     onClick={() => updateVoice(v)}
-                    className={`flex-1 rounded-l-md px-3 py-2 text-left text-sm transition-colors
-                      ${selected ? 'font-medium text-foreground' : 'text-muted-foreground hover:bg-accent'}
-                    `}
-                  >
+                    className={`flex-1 rounded-l-md px-3 py-2 text-left text-sm transition-colors ${selected ? 'text-foreground font-medium' : 'text-muted-foreground hover:bg-accent'} `}>
                     {label}
                   </button>
                   <button
@@ -669,11 +744,7 @@ export function SettingsPage() {
                     disabled={isPlaying}
                     aria-label={`Preview ${v} voice`}
                     title={isPlaying ? 'Playing…' : `Preview ${label}`}
-                    className={`flex w-9 items-center justify-center rounded-r-md border-l border-input
-                      text-muted-foreground transition-colors hover:bg-background hover:text-foreground
-                      disabled:opacity-50 disabled:cursor-not-allowed
-                    `}
-                  >
+                    className={`border-input text-muted-foreground hover:bg-background hover:text-foreground flex w-9 items-center justify-center rounded-r-md border-l transition-colors disabled:cursor-not-allowed disabled:opacity-50`}>
                     <Play size={14} className={isPlaying ? 'animate-pulse' : ''} />
                   </button>
                 </div>
@@ -681,44 +752,44 @@ export function SettingsPage() {
             })}
           </div>
           {previewError ? (
-            <p className="text-xs text-destructive" role="alert">
+            <p className="text-destructive text-xs" role="alert">
               {previewError}
             </p>
           ) : null}
         </Card>
 
         {/* Audio Devices */}
-        <Card className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-foreground">Audio Devices</h3>
+        <Card className="space-y-4 p-4">
+          <h3 className="text-foreground text-sm font-semibold">Audio Devices</h3>
 
           <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Input (Microphone)</label>
-            <Select
-              value={inputDeviceId}
-              onChange={(e) => updateInputDevice(e.target.value)}
-            >
+            <label className="text-muted-foreground text-xs">Input (Microphone)</label>
+            <Select value={inputDeviceId} onChange={(e) => updateInputDevice(e.target.value)}>
               <option value="">System Default</option>
               {inputDevices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                <option key={d.deviceId} value={d.deviceId}>
+                  {d.label}
+                </option>
               ))}
             </Select>
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Output (Speaker)</label>
-            <Select
-              value={outputDeviceId}
-              onChange={(e) => updateOutputDevice(e.target.value)}
-            >
+            <label className="text-muted-foreground text-xs">Output (Speaker)</label>
+            <Select value={outputDeviceId} onChange={(e) => updateOutputDevice(e.target.value)}>
               <option value="">System Default</option>
               {outputDevices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                <option key={d.deviceId} value={d.deviceId}>
+                  {d.label}
+                </option>
               ))}
             </Select>
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Speaker Volume: {volume.toFixed(1)}x</label>
+            <label className="text-muted-foreground text-xs">
+              Speaker Volume: {volume.toFixed(1)}x
+            </label>
             <input
               type="range"
               min={0.5}
@@ -726,9 +797,9 @@ export function SettingsPage() {
               step={0.1}
               value={volume}
               onChange={(e) => updateVolume(Math.round(parseFloat(e.target.value) * 10) / 10)}
-              className="w-full accent-primary"
+              className="accent-primary w-full"
             />
-            <div className="flex justify-between text-[10px] text-muted-foreground">
+            <div className="text-muted-foreground flex justify-between text-[10px]">
               <span>Quiet</span>
               <span>Max</span>
             </div>
@@ -737,24 +808,20 @@ export function SettingsPage() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => enumerateAudioDevices().then(setAudioDevices)}
-          >
+            onClick={() => enumerateAudioDevices().then(setAudioDevices)}>
             Refresh Devices
           </Button>
         </Card>
 
         {/* Appearance */}
-        <Card className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-foreground">Appearance</h3>
+        <Card className="space-y-4 p-4">
+          <h3 className="text-foreground text-sm font-semibold">Appearance</h3>
           <div className="flex gap-2">
             {(['dark', 'light', 'system'] as Theme[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTheme(t)}
-                className={`flex-1 rounded-md border px-3 py-2 text-sm capitalize transition-colors
-                  ${theme === t ? 'border-primary bg-accent font-medium text-foreground' : 'border-input text-muted-foreground hover:bg-accent'}
-                `}
-              >
+                className={`flex-1 rounded-md border px-3 py-2 text-sm capitalize transition-colors ${theme === t ? 'border-primary bg-accent text-foreground font-medium' : 'border-input text-muted-foreground hover:bg-accent'} `}>
                 {t}
               </button>
             ))}
@@ -762,14 +829,15 @@ export function SettingsPage() {
         </Card>
 
         {/* Call Bar */}
-        <Card className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-foreground">Call Bar</h3>
+        <Card className="space-y-4 p-4">
+          <h3 className="text-foreground text-sm font-semibold">Call Bar</h3>
 
           <div className="flex items-center justify-between">
             <div className="pr-4">
-              <p className="text-sm text-foreground">Show floating call bar during sessions</p>
-              <p className="text-xs text-muted-foreground">
-                A small always-on-top pill that shows live waveforms while you&apos;re on a call. Drag to reposition.
+              <p className="text-foreground text-sm">Show floating call bar during sessions</p>
+              <p className="text-muted-foreground text-xs">
+                A small always-on-top pill that shows live waveforms while you&apos;re on a call.
+                Drag to reposition.
               </p>
             </div>
             <Toggle checked={callBarEnabled} onChange={toggleCallBar} />
@@ -779,28 +847,27 @@ export function SettingsPage() {
         <ShortcutsCard />
 
         {/* Updates */}
-        <Card className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-foreground">Updates</h3>
+        <Card className="space-y-4 p-4">
+          <h3 className="text-foreground text-sm font-semibold">Updates</h3>
 
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-foreground">Current version</p>
-              <p className="text-xs text-muted-foreground">{updateState?.currentVersion ?? '—'}</p>
+              <p className="text-foreground text-sm">Current version</p>
+              <p className="text-muted-foreground text-xs">{updateState?.currentVersion ?? '—'}</p>
             </div>
             {updateState?.currentVersion && (
               <a
                 href={`https://github.com/yagudaev/voiceclaw/releases/tag/desktop-v${updateState.currentVersion}`}
                 target="_blank"
                 rel="noreferrer"
-                className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-              >
+                className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-2">
                 View release notes
               </a>
             )}
           </div>
 
           {updateState?.lastChecked && (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-muted-foreground text-xs">
               Last checked: {relativeTime(updateState.lastChecked)}
             </p>
           )}
@@ -808,32 +875,35 @@ export function SettingsPage() {
           {updateState?.status === 'staged' && updateState.stagedVersion && (
             <div className="flex items-center justify-between rounded-md border border-[var(--brand-sage)] bg-[var(--brand-sage-wash)] px-3 py-2">
               <div>
-                <p className="text-sm text-foreground font-medium">
+                <p className="text-foreground text-sm font-medium">
                   Update ready: {updateState.stagedVersion}
                 </p>
-                <p className="text-xs text-muted-foreground">Restart to apply</p>
+                <p className="text-muted-foreground text-xs">Restart to apply</p>
               </div>
               <Button
                 variant="default"
                 size="sm"
                 onClick={async () => {
                   await window.electronAPI.updates.installNow('settings')
-                }}
-              >
+                }}>
                 Restart now
               </Button>
             </div>
           )}
 
           {updateState?.status === 'error' && updateState.error && (
-            <p className="text-xs text-destructive">{updateState.error}</p>
+            <p className="text-destructive text-xs">{updateState.error}</p>
           )}
 
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
-              disabled={checkingUpdate || updateState?.status === 'checking' || updateState?.status === 'downloading'}
+              disabled={
+                checkingUpdate ||
+                updateState?.status === 'checking' ||
+                updateState?.status === 'downloading'
+              }
               onClick={async () => {
                 setCheckingUpdate(true)
                 try {
@@ -842,45 +912,48 @@ export function SettingsPage() {
                 } finally {
                   setCheckingUpdate(false)
                 }
-              }}
-            >
-              {(checkingUpdate || updateState?.status === 'checking') ? 'Checking…'
-                : updateState?.status === 'downloading' ? 'Downloading…'
-                : 'Check for updates'}
+              }}>
+              {checkingUpdate || updateState?.status === 'checking'
+                ? 'Checking…'
+                : updateState?.status === 'downloading'
+                  ? 'Downloading…'
+                  : 'Check for updates'}
             </Button>
             {updateState?.status === 'up-to-date' && (
-              <span className="text-xs text-muted-foreground">Up to date</span>
+              <span className="text-muted-foreground text-xs">Up to date</span>
             )}
             {updateState?.status === 'downloading' && (
-              <span className="text-xs text-muted-foreground">Downloading in background…</span>
+              <span className="text-muted-foreground text-xs">Downloading in background…</span>
             )}
           </div>
         </Card>
 
         {/* Debug */}
-        <Card className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-foreground">Debug</h3>
+        <Card className="space-y-4 p-4">
+          <h3 className="text-foreground text-sm font-semibold">Debug</h3>
 
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-foreground">Debug Mode</p>
-              <p className="text-xs text-muted-foreground">Show event counters during calls</p>
+              <p className="text-foreground text-sm">Debug Mode</p>
+              <p className="text-muted-foreground text-xs">Show event counters during calls</p>
             </div>
             <Toggle checked={debugMode} onChange={toggleDebugMode} />
           </div>
 
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-foreground">Show Latency</p>
-              <p className="text-xs text-muted-foreground">Display latency badges on chat messages</p>
+              <p className="text-foreground text-sm">Show Latency</p>
+              <p className="text-muted-foreground text-xs">
+                Display latency badges on chat messages
+              </p>
             </div>
             <Toggle checked={showLatency} onChange={toggleShowLatency} />
           </div>
 
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-foreground">Show Context Usage</p>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-foreground text-sm">Show Context Usage</p>
+              <p className="text-muted-foreground text-xs">
                 Live token count vs the model&apos;s context window during a call
               </p>
             </div>
@@ -889,16 +962,21 @@ export function SettingsPage() {
 
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-foreground">Send Traces</p>
-              <p className="text-xs text-muted-foreground">Post per-turn latency to Langfuse via relay</p>
+              <p className="text-foreground text-sm">Send Traces</p>
+              <p className="text-muted-foreground text-xs">
+                Post per-turn latency to Langfuse via relay
+              </p>
             </div>
             <Toggle checked={tracingEnabled} onChange={toggleTracing} />
           </div>
 
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-foreground">Re-run onboarding wizard</p>
-              <p className="text-xs text-muted-foreground">Resets the wizard cursor so you can step through it again. API keys and sign-in stay.</p>
+              <p className="text-foreground text-sm">Re-run onboarding wizard</p>
+              <p className="text-muted-foreground text-xs">
+                Resets the wizard cursor so you can step through it again. API keys and sign-in
+                stay.
+              </p>
             </div>
             <Button
               variant="outline"
@@ -906,43 +984,44 @@ export function SettingsPage() {
               onClick={async () => {
                 const result = await onboarding.reset()
                 if (result.ok) window.location.reload()
-              }}
-            >
+              }}>
               Restart
             </Button>
           </div>
 
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-foreground">Reveal Logs in Finder</p>
-              <p className="text-xs text-muted-foreground">Opens ~/Library/Logs/VoiceClaw/ in Finder. Useful when troubleshooting.</p>
+              <p className="text-foreground text-sm">Reveal Logs in Finder</p>
+              <p className="text-muted-foreground text-xs">
+                Opens ~/Library/Logs/VoiceClaw/ in Finder. Useful when troubleshooting.
+              </p>
             </div>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => { window.electronAPI.logs.reveal() }}
-            >
+              onClick={() => {
+                window.electronAPI.logs.reveal()
+              }}>
               Reveal
             </Button>
           </div>
 
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-foreground">Run brain diagnostic</p>
-              <p className="text-xs text-muted-foreground">10-point check of the brain pipeline — openclaw, relay, Gemini API, and more.</p>
+              <p className="text-foreground text-sm">Run brain diagnostic</p>
+              <p className="text-muted-foreground text-xs">
+                10-point check of the brain pipeline — openclaw, relay, Gemini API, and more.
+              </p>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={runBrainDoctor}
-              disabled={doctorRunning}
-            >
+            <Button variant="outline" size="sm" onClick={runBrainDoctor} disabled={doctorRunning}>
               {doctorRunning ? (
                 <span className="flex items-center gap-1.5">
-                  <span className="h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
                   Running…
                 </span>
-              ) : 'Run'}
+              ) : (
+                'Run'
+              )}
             </Button>
           </div>
 
@@ -956,46 +1035,45 @@ export function SettingsPage() {
 
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-foreground">Export diagnostic bundle</p>
-              <p className="text-xs text-muted-foreground">Bundles logs and config (with API keys redacted) for support. Saved to Downloads.</p>
+              <p className="text-foreground text-sm">Export diagnostic bundle</p>
+              <p className="text-muted-foreground text-xs">
+                Bundles logs and config (with API keys redacted) for support. Saved to Downloads.
+              </p>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={exportBundle}
-              disabled={exportingBundle}
-            >
+            <Button variant="outline" size="sm" onClick={exportBundle} disabled={exportingBundle}>
               {exportingBundle ? (
                 <span className="flex items-center gap-1.5">
-                  <span className="h-3.5 w-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
                   Bundling…
                 </span>
-              ) : 'Export'}
+              ) : (
+                'Export'
+              )}
             </Button>
           </div>
 
           {bundleToast && (
-            <p className={`text-xs ${bundleToast.ok ? 'text-[var(--brand-sage)]' : 'text-destructive'}`}>
+            <p
+              className={`text-xs ${bundleToast.ok ? 'text-[var(--brand-sage)]' : 'text-destructive'}`}>
               {bundleToast.message}
             </p>
           )}
         </Card>
 
         {/* Privacy */}
-        <Card className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-foreground">Privacy</h3>
+        <Card className="space-y-4 p-4">
+          <h3 className="text-foreground text-sm font-semibold">Privacy</h3>
           <div className="flex items-center justify-between">
             <div className="pr-4">
-              <p className="text-sm text-foreground">Share anonymous diagnostics</p>
-              <p className="text-xs text-muted-foreground">
-                PostHog telemetry: usage events + crash reports. Never sends voice, transcripts, or API keys.
+              <p className="text-foreground text-sm">Share anonymous diagnostics</p>
+              <p className="text-muted-foreground text-xs">
+                PostHog telemetry: usage events + crash reports. Never sends voice, transcripts, or
+                API keys.
               </p>
             </div>
             <Toggle checked={telemetryEnabled} onChange={toggleTelemetry} />
           </div>
         </Card>
-
-
       </div>
     </div>
   )
@@ -1105,32 +1183,33 @@ function BrainDoctorPanel({
   onCopy: () => void
 }) {
   return (
-    <div className="rounded-md border border-input bg-muted/30 overflow-hidden">
-      <div className="px-3 py-2 flex items-center justify-between border-b border-input">
-        <span className="text-xs font-medium text-foreground">
+    <div className="border-input bg-muted/30 overflow-hidden rounded-md border">
+      <div className="border-input flex items-center justify-between border-b px-3 py-2">
+        <span className="text-foreground text-xs font-medium">
           {result.passed} passed · {result.failed} failed · {result.skipped} skipped
         </span>
         <Button variant="ghost" size="sm" onClick={onCopy}>
           {copied ? 'Copied!' : 'Copy results'}
         </Button>
       </div>
-      <ul className="divide-y divide-input">
+      <ul className="divide-input divide-y">
         {result.checks.map((check, i) => (
-          <li key={i} className="px-3 py-2 space-y-0.5">
+          <li key={i} className="space-y-0.5 px-3 py-2">
             <div className="flex items-center gap-2">
-              <span className={`text-sm leading-none ${
-                check.status === 'PASS'
-                  ? 'text-[var(--brand-sage)]'
-                  : check.status === 'FAIL'
-                  ? 'text-destructive'
-                  : 'text-muted-foreground'
-              }`}>
+              <span
+                className={`text-sm leading-none ${
+                  check.status === 'PASS'
+                    ? 'text-[var(--brand-sage)]'
+                    : check.status === 'FAIL'
+                      ? 'text-destructive'
+                      : 'text-muted-foreground'
+                }`}>
                 {check.status === 'PASS' ? '✓' : check.status === 'FAIL' ? '✗' : '–'}
               </span>
-              <span className="text-sm text-foreground">{check.label}</span>
+              <span className="text-foreground text-sm">{check.label}</span>
             </div>
             {check.status === 'FAIL' && check.hint && (
-              <p className="text-xs text-muted-foreground pl-5">{check.hint}</p>
+              <p className="text-muted-foreground pl-5 text-xs">{check.hint}</p>
             )}
           </li>
         ))}
@@ -1168,7 +1247,7 @@ function VoiceModelCard({
         setEditorAnchor(null)
       }
     },
-    [configuredProviders, onSelectModel],
+    [configuredProviders, onSelectModel]
   )
 
   const handleSaved = useCallback(async () => {
@@ -1177,8 +1256,8 @@ function VoiceModelCard({
   }, [onSaved])
 
   return (
-    <Card className="p-4 space-y-4">
-      <h3 className="text-sm font-semibold text-foreground">Voice Model</h3>
+    <Card className="space-y-4 p-4">
+      <h3 className="text-foreground text-sm font-semibold">Voice Model</h3>
 
       <div className="space-y-1.5" role="radiogroup" aria-label="Voice model">
         {REALTIME_MODELS.map((m) => {
@@ -1200,9 +1279,7 @@ function VoiceModelCard({
                 <InlineKeyEditor
                   provider={provider}
                   configured={isConfigured}
-                  requiredForModel={
-                    isSelected && !isConfigured ? REALTIME_MODEL_LABELS[m] : null
-                  }
+                  requiredForModel={isSelected && !isConfigured ? REALTIME_MODEL_LABELS[m] : null}
                   onSaved={handleSaved}
                   onClose={() => setEditorAnchor(null)}
                 />
@@ -1212,29 +1289,21 @@ function VoiceModelCard({
         })}
       </div>
 
-      <div className="pt-3 border-t border-input space-y-2">
-        <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
-          Key source
-        </p>
+      <div className="border-input space-y-2 border-t pt-3">
+        <p className="text-muted-foreground text-[11px] tracking-wider uppercase">Key source</p>
         <div className="grid grid-cols-2 gap-2">
-          <div className="flex items-center gap-2 rounded-md border border-primary bg-accent px-3 py-2">
-            <div className="h-3.5 w-3.5 rounded-full border-2 border-primary flex items-center justify-center">
-              <div className="h-1.5 w-1.5 rounded-full bg-primary" />
+          <div className="border-primary bg-accent flex items-center gap-2 rounded-md border px-3 py-2">
+            <div className="border-primary flex h-3.5 w-3.5 items-center justify-center rounded-full border-2">
+              <div className="bg-primary h-1.5 w-1.5 rounded-full" />
             </div>
-            <span className="text-sm font-medium text-foreground">
-              Use my API keys
-            </span>
+            <span className="text-foreground text-sm font-medium">Use my API keys</span>
           </div>
-          <div className="flex items-center justify-between gap-2 rounded-md border border-dashed border-input bg-muted/30 px-3 py-2 opacity-60">
+          <div className="border-input bg-muted/30 flex items-center justify-between gap-2 rounded-md border border-dashed px-3 py-2 opacity-60">
             <div className="flex items-center gap-2">
-              <div className="h-3.5 w-3.5 rounded-full border-2 border-muted-foreground" />
-              <span className="text-sm text-muted-foreground">
-                Managed by VoiceClaw
-              </span>
+              <div className="border-muted-foreground h-3.5 w-3.5 rounded-full border-2" />
+              <span className="text-muted-foreground text-sm">Managed by VoiceClaw</span>
             </div>
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Soon
-            </span>
+            <span className="text-muted-foreground text-[10px] tracking-wider uppercase">Soon</span>
           </div>
         </div>
       </div>
@@ -1270,31 +1339,23 @@ function ModelRow({
       role="radio"
       aria-checked={selected}
       tabIndex={0}
-      className={`w-full flex items-center gap-3 rounded-md border px-3 py-2 transition-colors cursor-pointer
-        ${selected ? 'border-primary bg-accent' : 'border-input'}
-        hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50
-      `}
-    >
+      className={`flex w-full cursor-pointer items-center gap-3 rounded-md border px-3 py-2 transition-colors ${selected ? 'border-primary bg-accent' : 'border-input'} hover:bg-accent focus-visible:ring-primary/50 focus-visible:ring-2 focus-visible:outline-none`}>
       <div
-        className={`h-3.5 w-3.5 rounded-full border-2 flex items-center justify-center shrink-0
-          ${selected ? 'border-primary' : 'border-muted-foreground'}
-        `}
-      >
-        {selected && <div className="h-1.5 w-1.5 rounded-full bg-primary" />}
+        className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-2 ${selected ? 'border-primary' : 'border-muted-foreground'} `}>
+        {selected && <div className="bg-primary h-1.5 w-1.5 rounded-full" />}
       </div>
 
       <span
-        className={`text-sm flex-1 truncate ${selected ? 'font-medium text-foreground' : 'text-foreground'}`}
-      >
+        className={`flex-1 truncate text-sm ${selected ? 'text-foreground font-medium' : 'text-foreground'}`}>
         {REALTIME_MODEL_LABELS[model]}
       </span>
 
-      <span className="text-[11px] text-muted-foreground shrink-0">
+      <span className="text-muted-foreground shrink-0 text-[11px]">
         {PROVIDER_DISPLAY_LABELS[provider]}
       </span>
 
       {configured ? (
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex shrink-0 items-center gap-2">
           <span className="text-xs text-[var(--brand-sage)]">✓ Configured</span>
           <button
             type="button"
@@ -1302,24 +1363,20 @@ function ModelRow({
               e.stopPropagation()
               onOpenEditor()
             }}
-            className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
-          >
+            className="text-muted-foreground hover:text-foreground text-[11px] underline underline-offset-2">
             Manage
           </button>
         </div>
       ) : (
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-xs text-amber-600 dark:text-amber-400">
-            Missing key
-          </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="text-xs text-amber-600 dark:text-amber-400">Missing key</span>
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation()
               onOpenEditor()
             }}
-            className="rounded-md border border-input bg-background px-2 py-0.5 text-[11px] font-medium text-foreground hover:bg-muted"
-          >
+            className="border-input bg-background text-foreground hover:bg-muted rounded-md border px-2 py-0.5 text-[11px] font-medium">
             Add key
           </button>
         </div>
@@ -1328,37 +1385,37 @@ function ModelRow({
   )
 }
 
-const VOICE_MODE_META: Record<
-  VoiceMode,
-  { label: string; helper: string; comingSoon?: boolean }
-> = {
-  direct: {
-    label: 'Direct',
-    helper: 'The assistant uses tools directly — read, write, edit, bash, web search. Lowest latency.',
-  },
-  operator: {
-    label: 'Operator',
-    helper: 'Delegates to your agent (the classic ask_brain flow). Best for multi-step tasks and personal memory.',
-  },
-  supervisor: {
-    label: 'Supervisor',
-    helper: 'A supervisor agent keeps the conversation on track — coming soon. Behaves like Direct today.',
-    comingSoon: true,
-  },
-}
+const VOICE_MODE_META: Record<VoiceMode, { label: string; helper: string; comingSoon?: boolean }> =
+  {
+    direct: {
+      label: 'Direct',
+      helper:
+        'The assistant uses tools directly — read, write, edit, bash, web search. Lowest latency.',
+    },
+    operator: {
+      label: 'Operator',
+      helper:
+        'Delegates to your agent (the classic ask_brain flow). Best for multi-step tasks and personal memory.',
+    },
+    supervisor: {
+      label: 'Supervisor',
+      helper:
+        'A supervisor agent keeps the conversation on track — coming soon. Behaves like Direct today.',
+      comingSoon: true,
+    },
+    'stt-tts-harness': {
+      label: 'STT/TTS Harness',
+      helper:
+        'Speech-to-text, a Desktop-hosted Harness, and text-to-speech. Requires a Provider, Workspace, and binding below.',
+    },
+  }
 
-function VoiceModeCard({
-  mode,
-  onSelect,
-}: {
-  mode: VoiceMode
-  onSelect: (m: VoiceMode) => void
-}) {
+function VoiceModeCard({ mode, onSelect }: { mode: VoiceMode; onSelect: (m: VoiceMode) => void }) {
   return (
-    <Card className="p-4 space-y-4">
+    <Card className="space-y-4 p-4">
       <div>
-        <h3 className="text-sm font-semibold text-foreground">Voice Mode</h3>
-        <p className="text-xs text-muted-foreground mt-1">
+        <h3 className="text-foreground text-sm font-semibold">Voice Mode</h3>
+        <p className="text-muted-foreground mt-1 text-xs">
           How the realtime model gets its capabilities.
         </p>
       </div>
@@ -1379,10 +1436,7 @@ function VoiceModeCard({
   )
 }
 
-const AGENT_BACKEND_META: Record<
-  AgentBackend,
-  { label: string; helper: string }
-> = {
+const AGENT_BACKEND_META: Record<AgentBackend, { label: string; helper: string }> = {
   pi: {
     label: 'PI',
     helper: 'Pi Mono harness running locally. Default. Requires the pi CLI on PATH.',
@@ -1405,10 +1459,10 @@ function AgentBackendCard({
   onSelect: (b: AgentBackend) => void
 }) {
   return (
-    <Card className="p-4 space-y-4">
+    <Card className="space-y-4 p-4">
       <div>
-        <h3 className="text-sm font-semibold text-foreground">Agent</h3>
-        <p className="text-xs text-muted-foreground mt-1">
+        <h3 className="text-foreground text-sm font-semibold">Agent</h3>
+        <p className="text-muted-foreground mt-1 text-xs">
           Which agent runs your tasks. Must be installed on this machine.
         </p>
       </div>
@@ -1454,31 +1508,25 @@ function RadioOptionRow({
       role="radio"
       aria-checked={selected}
       tabIndex={0}
-      className={`w-full flex items-start gap-3 rounded-md border px-3 py-2 transition-colors cursor-pointer
-        ${selected ? 'border-primary bg-accent' : 'border-input'}
-        hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50
-      `}
-    >
+      className={`flex w-full cursor-pointer items-start gap-3 rounded-md border px-3 py-2 transition-colors ${selected ? 'border-primary bg-accent' : 'border-input'} hover:bg-accent focus-visible:ring-primary/50 focus-visible:ring-2 focus-visible:outline-none`}>
       <div
-        className={`mt-1 h-3.5 w-3.5 rounded-full border-2 flex items-center justify-center shrink-0
-          ${selected ? 'border-primary' : 'border-muted-foreground'}
-        `}
-      >
-        {selected && <div className="h-1.5 w-1.5 rounded-full bg-primary" />}
+        className={`mt-1 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-2 ${selected ? 'border-primary' : 'border-muted-foreground'} `}>
+        {selected && <div className="bg-primary h-1.5 w-1.5 rounded-full" />}
       </div>
 
-      <div className="flex-1 min-w-0">
+      <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className={`text-sm ${selected ? 'font-medium text-foreground' : 'text-foreground'}`}>
+          <span
+            className={`text-sm ${selected ? 'text-foreground font-medium' : 'text-foreground'}`}>
             {label}
           </span>
           {badge && (
-            <span className="text-[10px] uppercase tracking-wider rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
+            <span className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 text-[10px] tracking-wider uppercase">
               {badge}
             </span>
           )}
         </div>
-        <p className="text-[11px] text-muted-foreground mt-0.5">{helper}</p>
+        <p className="text-muted-foreground mt-0.5 text-[11px]">{helper}</p>
       </div>
     </div>
   )
@@ -1529,16 +1577,13 @@ function InlineKeyEditor({
   }, [provider, key, onSaved])
 
   return (
-    <div className="mt-1.5 ml-6 mr-0 rounded-md border border-input bg-muted/30 p-3 space-y-2">
+    <div className="border-input bg-muted/30 mt-1.5 mr-0 ml-6 space-y-2 rounded-md border p-3">
       <div className="flex items-center justify-between gap-2">
-        <label className="text-xs font-medium text-foreground">
-          {providerLabel} API key
-        </label>
+        <label className="text-foreground text-xs font-medium">{providerLabel} API key</label>
         <button
           type="button"
           onClick={onClose}
-          className="text-[11px] text-muted-foreground hover:text-foreground"
-        >
+          className="text-muted-foreground hover:text-foreground text-[11px]">
           Cancel
         </button>
       </div>
@@ -1550,7 +1595,7 @@ function InlineKeyEditor({
       )}
 
       <div className="flex gap-2">
-        <div className="flex-1 relative">
+        <div className="relative flex-1">
           <Input
             type={show ? 'text' : 'password'}
             value={key}
@@ -1566,8 +1611,7 @@ function InlineKeyEditor({
             type="button"
             onClick={() => setShow((v) => !v)}
             aria-label={show ? 'Hide key' : 'Show key'}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-          >
+            className="text-muted-foreground hover:text-foreground absolute top-1/2 right-2 -translate-y-1/2">
             {show ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
         </div>
@@ -1575,8 +1619,7 @@ function InlineKeyEditor({
           variant="outline"
           size="sm"
           onClick={() => void handleSave()}
-          disabled={status.kind === 'saving' || key.length === 0}
-        >
+          disabled={status.kind === 'saving' || key.length === 0}>
           {status.kind === 'saving' ? 'Checking…' : 'Validate + save'}
         </Button>
       </div>
@@ -1586,15 +1629,14 @@ function InlineKeyEditor({
           href={meta.url}
           target="_blank"
           rel="noreferrer"
-          className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
-        >
+          className="text-muted-foreground hover:text-foreground text-[11px] underline underline-offset-2">
           Get a key at {meta.linkLabel}
         </a>
         {status.kind === 'saved' && (
           <span className="text-[11px] text-[var(--brand-sage)]">Key saved.</span>
         )}
         {status.kind === 'error' && (
-          <span className="text-[11px] text-destructive" role="alert">
+          <span className="text-destructive text-[11px]" role="alert">
             {status.message}
           </span>
         )}
@@ -1602,4 +1644,3 @@ function InlineKeyEditor({
     </div>
   )
 }
-

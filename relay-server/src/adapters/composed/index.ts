@@ -6,6 +6,8 @@ import type { STTProvider } from '../../stt/interface.js'
 import type { TTSProvider } from '../../tts/interface.js'
 import type { SessionConfigEvent } from '../../types.js'
 import type { OutputRouter } from './output-router.js'
+import type { HarnessRoutingPort } from '../../harness-execution/dispatch.js'
+import { HarnessAttemptSession } from '../../harness-execution/session-routing.js'
 
 const HARNESS_RECOVERY_GUIDANCE =
   'Resubmit the input after restoring the Harness configuration, or explicitly select S2S Direct with mode "s2s" and voiceMode "direct", or S2S Operator with mode "s2s" and voiceMode "operator".'
@@ -19,17 +21,33 @@ export class ComposedAdapter implements ProviderAdapter {
   private activeStream: StreamHandle | null = null
   private sessionId = ''
   private activeTurnId: string | null = null
+  private harnessSession: HarnessAttemptSession | null = null
 
   constructor(
     private readonly stt: STTProvider,
     private readonly harness: HarnessAdapter,
     private readonly tts: TTSProvider,
-    private readonly outputRouter: OutputRouter
+    private readonly outputRouter: OutputRouter,
+    private readonly harnessRouting?: HarnessRoutingPort
   ) {}
 
   async connect(config: SessionConfigEvent, sendToClient: SendToClient): Promise<void> {
     this.sendToClient = sendToClient
     this.sessionId = config.sessionKey ?? randomUUID()
+    this.harnessSession =
+      this.harnessRouting && config.harnessBinding
+        ? new HarnessAttemptSession({
+            routing: this.harnessRouting,
+            tts: this.tts,
+            ...(config.ttsConfig?.sentenceBatchSize === undefined
+              ? {}
+              : { sentenceBatchSize: config.ttsConfig.sentenceBatchSize }),
+            sendToClient: (event) => this.sendToClient(event as never),
+            // The adapter is constructed only after the Relay Session is
+            // authenticated, so the owning session is the cancel principal.
+            cancelPrincipal: { kind: 'user', id: this.sessionId },
+          })
+        : null
     this.stt.onPartialTranscript((text) => {
       this.sendToClient({
         type: 'transcript.delta',
@@ -43,7 +61,25 @@ export class ComposedAdapter implements ProviderAdapter {
       this.audioBuffer.length = 0
       this.retryAudio = false
       this.sendToClient({ type: 'transcript.done', text, role: 'user' })
-      void this.sendMessage({ text })
+      if (this.harnessSession && config.harnessBinding) {
+        void this.harnessSession
+          .accept(this.sessionId, text, {
+            bindingId: config.harnessBinding.bindingId,
+            providerId: config.harnessBinding.providerId,
+            workspaceBindingId: config.harnessBinding.workspaceBindingId,
+            generation: config.harnessBinding.generation ?? 0,
+          })
+          .catch((error: unknown) => {
+            const detail = error instanceof Error ? error.message : String(error)
+            this.sendToClient({
+              type: 'error',
+              code: 502,
+              message: `Harness request failed: ${detail}. ${HARNESS_RECOVERY_GUIDANCE}`,
+            })
+          })
+      } else {
+        void this.sendMessage({ text })
+      }
     })
     this.stt.onError((message) => {
       this.sendToClient({ type: 'error', code: 502, message: `STT failed: ${message}` })
@@ -84,6 +120,10 @@ export class ComposedAdapter implements ProviderAdapter {
   createResponse(): void {}
 
   cancelResponse(): void {
+    if (this.harnessSession) {
+      void this.harnessSession.cancel('user requested cancellation')
+      return
+    }
     const hadActiveStream = this.activeStream !== null
     this.activeStream?.cancel()
     this.activeStream = null
@@ -106,6 +146,7 @@ export class ComposedAdapter implements ProviderAdapter {
 
   disconnect(): void {
     this.clearSTTTimeout()
+    this.harnessSession = null
     void this.stt.disconnect()
     void this.harness.disconnect()
     void this.tts.disconnect()

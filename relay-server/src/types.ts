@@ -93,6 +93,12 @@ export interface SessionConfigEvent {
   sttProvider?: string
   ttsProvider?: string
   harness?: string
+  harnessBinding?: {
+    bindingId: string
+    providerId: string
+    workspaceBindingId: string
+    generation?: number
+  }
   sttConfig?: STTWireConfig
   ttsConfig?: TTSWireConfig
   harnessConfig?: HarnessWireConfig

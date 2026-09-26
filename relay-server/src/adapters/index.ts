@@ -9,6 +9,7 @@ import type { SessionConfigEvent } from '../types.js'
 import { ComposedAdapter } from './composed/index.js'
 import { OutputRouter } from './composed/output-router.js'
 import type { ThinkingContent } from '../harness-adapter/types.js'
+import type { HarnessRoutingPort } from '../harness-execution/dispatch.js'
 import {
   getThinkingStorage,
   type ThinkingEntry,
@@ -28,6 +29,7 @@ export interface AdapterFactoryDependencies {
   saveThinking?: (entry: ThinkingEntry) => Promise<ThinkingSaveMetadata | null>
   attachThinking?: (content: ThinkingContent, turnId?: string) => void
   getThinkingTracePath?: (turnId?: string) => string | undefined
+  harnessRouting?: HarnessRoutingPort
 }
 
 export function createAdapter(
@@ -58,7 +60,7 @@ export function createAdapter(
           thinkingStorage.append(entry, dependencies.getThinkingTracePath?.(entry.turnId))),
       attachThinkingContent: dependencies.attachThinking,
     })
-    return new ComposedAdapter(stt, harness, tts, outputRouter)
+    return new ComposedAdapter(stt, harness, tts, outputRouter, dependencies.harnessRouting)
   }
   const provider = typeof input === 'string' ? input : input.provider
   switch (provider) {

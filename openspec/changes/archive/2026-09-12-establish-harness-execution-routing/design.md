@@ -46,11 +46,59 @@ A proven pre-dispatch failure permits the user to create a new Attempt. `outcome
 
 Routing uses a deterministic `harness.execution@1` fixture to prove microphone/session input, finalized dispatch, normalized streaming, TTS submission, Desktop playback observation, cancellation, fencing, and operation with no Archive or Memory package installed. That fixture is not a production Provider and cannot satisfy `integrate-codex-provider-prototype`. Codex alone owns real installed/authenticated app-server and physical microphone acceptance.
 
+### Production wiring boundary
+
+The production `stt-tts` session path constructs routing from Relay-owned control state and
+Active Host services. `HarnessExecutionDispatcher` owns Turn/Attempt, Thread Mapping, and
+`harness.execution@1.0.0` invocation; `HarnessAttemptSession` owns the Relay half of the
+attempt - it feeds the returned Host stream through `HarnessStreamRouter`, synthesizes
+public speech through `HarnessSpeechDelivery`, projects public screen output to the Client,
+enforces exactly one terminal outcome, and completes the Attempt in the routing state.
+
+Contribution identity is Relay configuration, not client input: the client selects only
+binding, Provider, and Workspace, and `createProductionHarnessRouting` refuses any selection
+that does not match the Active Host Assignment, taking the generation from that assignment.
+
+The Desktop entry is reachable: the STT/TTS Harness Voice Mode option and its
+Provider/Workspace/binding settings flow into `session.config` as `mode: "stt-tts"` plus
+`harnessBinding`, and the realtime hook routes microphone and audio events through
+`STTTTSHarnessAudioBridge`. An incomplete selection is reported to the user and the call does
+not start; it never falls back to another Conversation Pipeline.
+
+The legacy `ComposedAdapter` dispatch path is retained only for sessions that supply no
+Harness routing port or binding, so older clients keep their existing behavior.
+
+Dispatch setup is transactional: if `thread.ensure`, mapping persistence, or `turn.start`
+fails before execution is accepted, the Attempt is removed and the Turn returns to the
+visible backlog. Dormant mappings are never reused until the selected Provider/Host binding
+is ready. While an Attempt is active, a later finalized input is accepted into the visible
+serial backlog rather than failing the session, and cancellation stops waiting on in-flight
+synthesis while preserving audio already emitted.
+
 ### Deferred routing facilities
 
 [PROPOSED] Later changes add complete Approval Route, multi-Client takeover/arbitration, queue editing, Provider-native recovery/status, rollback, and Native TUI Handoff.
 
 [TODO] Define production retention of Relay-Session-only message state and detailed restart UX; loss after restart remains allowed without Archive.
+
+### Known limits handed to the provider change
+
+The Phase 0 Kernel returns the whole `turn.start` event array once the Host stream
+closes, so Routing projects the stream after Host completion rather than as chunks
+arrive. The deterministic fixture cannot distinguish the two; incremental
+projection and real first-audio timing belong to `integrate-codex-provider-prototype`.
+
+The STT/TTS Harness cleanup bypass is keyed on `mode: "stt-tts"`. This change wires
+no Memory provider into that Pipeline, so keying on the Pipeline is equivalent to
+"no active authorized Memory provider exists" here; when Memory is wired in, the
+bypass must become a Memory-presence check.
+
+Optional Archive and Memory are modelled and tested as consumers
+(`OptionalArchiveConsumer`, `OptionalMemoryConsumer`) but this change deliberately
+links no Archive or Memory implementation into the production Relay, as required by
+the no-Archive/no-Memory acceptance task. Their production wiring point, including
+the degraded-status projection the Desktop bridge already expects, belongs to the
+change that installs the first real Archive or Memory provider.
 
 ## Risks / Trade-offs
 

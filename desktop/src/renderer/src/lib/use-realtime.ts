@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AudioEngine } from './audio-engine'
 import type { ToolCallProgressDelta } from './tool-call-store'
+import { STTTTSHarnessAudioBridge } from './stt-tts-harness-audio'
+import type { HarnessAudioTransport } from './stt-tts-harness-audio'
 
 export type { ToolCallProgressDelta } from './tool-call-store'
 
@@ -39,12 +41,29 @@ export interface RealtimeConfig {
     deviceModel?: string
   }
   instructionsOverride?: string
-  conversationHistory?: { role: 'user' | 'assistant', text: string, timestamp?: number, relativeMs?: number }[]
+  conversationHistory?: {
+    role: 'user' | 'assistant'
+    text: string
+    timestamp?: number
+    relativeMs?: number
+  }[]
   tracingEnabled?: boolean
   // Realtime model strategy. See relay-server/src/types.ts.
   voiceMode?: 'direct' | 'operator' | 'supervisor'
   // Which host-side agent backend powers Operator / future Supervisor.
   agentBackend?: 'pi' | 'openai' | 'hermes'
+  // Explicit STT/TTS Harness entry. `mode` selects the Conversation Pipeline;
+  // the binding must match the Relay's Active Host Assignment.
+  mode?: 's2s' | 'stt-tts'
+  sttProvider?: string
+  ttsProvider?: string
+  harness?: string
+  harnessBinding?: {
+    bindingId: string
+    providerId: string
+    workspaceBindingId: string
+    generation?: number
+  }
 }
 
 export interface AdapterErrorPayload {
@@ -62,7 +81,13 @@ export interface RealtimeCallbacks {
   onToolCall?: (callId: string, name: string, args: string) => void
   onToolCallProgress?: (callId: string, delta: ToolCallProgressDelta) => void
   onToolCallCompleted?: (callId: string, name: string, durationMs: number, result: string) => void
-  onToolCallFailed?: (callId: string, name: string, durationMs: number, error: string, cancelled: boolean) => void
+  onToolCallFailed?: (
+    callId: string,
+    name: string,
+    durationMs: number,
+    error: string,
+    cancelled: boolean
+  ) => void
   onToolCancelled?: (callIds: string[]) => void
   onBrainResult?: (callId: string, query: string, result?: string, error?: string) => void
   onTurnStarted?: () => void
@@ -72,6 +97,7 @@ export interface RealtimeCallbacks {
   onDisconnect?: () => void
   onError?: (message: string, code: number, payload?: AdapterErrorPayload) => void
   onUsage?: (usage: UsageSnapshot) => void
+  onHarnessEvent?: (event: Record<string, unknown>) => void
 }
 
 export interface UsageSnapshot {
@@ -88,10 +114,7 @@ export interface RealtimeControls {
   setMuted: (muted: boolean) => void
   setOutputVolume: (volume: number) => void
   setOutputMuted: (muted: boolean) => void
-  sendFrame: (
-    base64Jpeg: string,
-    annotation?: { original: string; strokesPng: string },
-  ) => void
+  sendFrame: (base64Jpeg: string, annotation?: { original: string; strokesPng: string }) => void
   sendUserText: (text: string) => boolean
   getInputLevel: () => number
   getOutputLevel: () => number
@@ -118,6 +141,7 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const hasConnectedRef = useRef(false)
   const callbacksRef = useRef(callbacks)
+  const harnessBridgeRef = useRef<STTTTSHarnessAudioBridge | null>(null)
   callbacksRef.current = callbacks
 
   useEffect(() => {
@@ -150,7 +174,7 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
     if (!configRef.current?.tracingEnabled) return
     if (wsRef.current?.readyState !== WebSocket.OPEN) return
     wsRef.current.send(
-      JSON.stringify({ type: 'client.timing', phase, ms, turnId: turnId ?? undefined }),
+      JSON.stringify({ type: 'client.timing', phase, ms, turnId: turnId ?? undefined })
     )
   }, [])
 
@@ -277,8 +301,12 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
           })
           break
       }
+      if (configRef.current?.mode === 'stt-tts') {
+        harnessBridgeRef.current?.receive(data)
+        cb.onHarnessEvent?.(data)
+      }
     },
-    [sendTiming],
+    [sendTiming]
   )
 
   const start = useCallback(
@@ -303,6 +331,24 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
 
       configRef.current = config
       userStoppedRef.current = false
+
+      // The STT/TTS Harness Pipeline carries microphone and playback through the
+      // provider-neutral bridge so the same relay events stay observable.
+      if (config.mode === 'stt-tts') {
+        const transport: HarnessAudioTransport = {
+          send: (message) => {
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify(message))
+            }
+          },
+          cancel: async (reason) => {
+            wsRef.current?.send(JSON.stringify({ type: 'response.cancel', reason }))
+          },
+        }
+        harnessBridgeRef.current = new STTTTSHarnessAudioBridge(transport)
+      } else {
+        harnessBridgeRef.current = null
+      }
 
       // Create audio engine
       const engine = new AudioEngine()
@@ -334,14 +380,23 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
             conversationHistory: config.conversationHistory,
             voiceMode: config.voiceMode,
             agentBackend: config.agentBackend,
-          }),
+            mode: config.mode,
+            sttProvider: config.sttProvider,
+            ttsProvider: config.ttsProvider,
+            harness: config.harness,
+            harnessBinding: config.harnessBinding,
+          })
         )
 
         // Start mic capture — audio data flows to WebSocket
         try {
           await engine.startCapture((base64) => {
             if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: 'audio.append', data: base64 }))
+              if (config.mode === 'stt-tts') {
+                harnessBridgeRef.current?.appendMicrophone(base64)
+              } else {
+                ws.send(JSON.stringify({ type: 'audio.append', data: base64 }))
+              }
             }
           }, config.inputDeviceId)
 
@@ -384,7 +439,7 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
             reconnectAttemptsRef.current += 1
             setIsReconnecting(true)
             console.log(
-              `[useRealtime] Unexpected disconnect — reconnect attempt ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms`,
+              `[useRealtime] Unexpected disconnect — reconnect attempt ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms`
             )
             reconnectTimerRef.current = setTimeout(() => {
               reconnectTimerRef.current = null
@@ -400,7 +455,7 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
         }
       }
     },
-    [handleMessage],
+    [handleMessage]
   )
 
   const stop = useCallback(() => {
@@ -417,6 +472,7 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
     wsRef.current = null
     setIsConnected(false)
     setSessionId(null)
+    harnessBridgeRef.current = null
   }, [])
 
   const setMuted = useCallback((muted: boolean) => {
@@ -432,21 +488,18 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
   }, [])
 
   const sendFrame = useCallback(
-    (
-      base64Jpeg: string,
-      annotation?: { original: string; strokesPng: string },
-    ) => {
+    (base64Jpeg: string, annotation?: { original: string; strokesPng: string }) => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(
           JSON.stringify({
             type: 'frame.append',
             data: base64Jpeg,
             ...(annotation ? { annotation } : {}),
-          }),
+          })
         )
       }
     },
-    [],
+    []
   )
 
   const sendUserText = useCallback((text: string) => {

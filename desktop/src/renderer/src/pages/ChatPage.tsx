@@ -44,6 +44,7 @@ import {
   type WindowBounds,
 } from '../lib/screen-capture'
 import { useRealtime, type RealtimeCallbacks, type AdapterErrorPayload } from '../lib/use-realtime'
+import { STTTTSHarnessSelection } from '../lib/stt-tts-harness-selection'
 import { captureRenderer } from '../lib/telemetry'
 import { useConversationContext } from '../lib/conversation-context'
 import {
@@ -137,7 +138,9 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
   const activeRelayUrlRef = useRef<string>('')
   const brainCallStartRef = useRef<Map<string, number>>(new Map())
   const textChatCancelRef = useRef<(() => void) | null>(null)
-  const [messageMenu, setMessageMenu] = useState<{ x: number; y: number; message: Message } | null>(null)
+  const [messageMenu, setMessageMenu] = useState<{ x: number; y: number; message: Message } | null>(
+    null
+  )
   const [showTimes, setShowTimes] = useState(false)
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -175,29 +178,32 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     (event: MouseEvent<HTMLDivElement>, message: Message) => {
       setMessageMenu({ x: event.clientX, y: event.clientY, message })
     },
-    [],
+    []
   )
 
   const closeMessageMenu = useCallback(() => setMessageMenu(null), [])
 
-  const handleDeleteMessage = useCallback(async (message: Message) => {
-    setMessageMenu(null)
-    const ok = window.confirm(
-      'Delete this message? This removes it from the conversation history and cannot be undone.',
-    )
-    if (!ok) return
-    setMessages((prev) => prev.filter((m) => m.id !== message.id))
-    try {
-      const result = await deleteMessage(message.id)
-      if (!result.ok) {
-        console.warn('[ChatPage] Failed to delete message:', result.error)
+  const handleDeleteMessage = useCallback(
+    async (message: Message) => {
+      setMessageMenu(null)
+      const ok = window.confirm(
+        'Delete this message? This removes it from the conversation history and cannot be undone.'
+      )
+      if (!ok) return
+      setMessages((prev) => prev.filter((m) => m.id !== message.id))
+      try {
+        const result = await deleteMessage(message.id)
+        if (!result.ok) {
+          console.warn('[ChatPage] Failed to delete message:', result.error)
+          await loadMessages()
+        }
+      } catch (err) {
+        console.warn('[ChatPage] Failed to delete message:', err)
         await loadMessages()
       }
-    } catch (err) {
-      console.warn('[ChatPage] Failed to delete message:', err)
-      await loadMessages()
-    }
-  }, [loadMessages])
+    },
+    [loadMessages]
+  )
 
   const handleCopyMessage = useCallback(async (message: Message) => {
     try {
@@ -285,10 +291,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
   const loadConversation = async (id: number) => {
     conversationIdRef.current = id
     setConversationId(id)
-    const [msgs, atts] = await Promise.all([
-      getMessages(id),
-      getAttachmentsForConversation(id),
-    ])
+    const [msgs, atts] = await Promise.all([getMessages(id), getAttachmentsForConversation(id)])
     setMessages(msgs)
     setAttachments(atts)
     titleGeneratedRef.current = msgs.length > 0
@@ -376,9 +379,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       } else {
         brainCallStartRef.current.delete(callId)
       }
-      const body = error
-        ? `[Brain] Failed for "${query}": ${error}`
-        : `[Brain] ${result ?? ''}`
+      const body = error ? `[Brain] Failed for "${query}": ${error}` : `[Brain] ${result ?? ''}`
       if (!body.trim()) return
       const convId = await ensureConversation()
       await addMessage(convId, 'assistant', body)
@@ -448,7 +449,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     // enabled — only the literal 'false' string disables.
     const tavilyEnabled = (await getSetting('tavily_enabled')) !== 'false'
     const tavilyApiKey = tavilyEnabled
-      ? ((await getSetting('tavily_api_key')) || undefined)
+      ? (await getSetting('tavily_api_key')) || undefined
       : undefined
     const baseRaw = await getSetting('realtime_volume')
     const baseParsed = parseFloat(baseRaw ?? '')
@@ -460,6 +461,14 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     const outputDeviceId = (await getSetting('output_device_id')) || undefined
     const voiceMode = normalizeVoiceMode(await getSetting('voice_mode'))
     const agentBackend = normalizeAgentBackend(await getSetting('agent_backend'))
+    // Explicit STT/TTS Harness entry: the Relay only dispatches finalized
+    // speech once the user has selected a Provider, Workspace, and binding.
+    const harnessSelection = await resolveHarnessSelection(voiceMode)
+    if (harnessSelection.unavailable) {
+      setIsConnecting(false)
+      setConnectionError(harnessSelection.unavailable)
+      return
+    }
 
     const convId = conversationIdRef.current
     const conversationHistory = convId
@@ -493,6 +502,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       tracingEnabled,
       voiceMode,
       agentBackend,
+      ...harnessSelection.config,
     })
   }, [realtime, outputGain])
 
@@ -540,14 +550,16 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
   // The floating call bar's context menu forwards mute / end-call
   // requests through main. Wire them to the chat UI's existing actions.
   useEffect(() => {
-    const api = (window as unknown as {
-      electronAPI?: {
-        callBar?: {
-          onMuteToggleRequest: (h: () => void) => () => void
-          onEndCallRequest: (h: () => void) => () => void
+    const api = (
+      window as unknown as {
+        electronAPI?: {
+          callBar?: {
+            onMuteToggleRequest: (h: () => void) => () => void
+            onEndCallRequest: (h: () => void) => () => void
+          }
         }
       }
-    }).electronAPI?.callBar
+    ).electronAPI?.callBar
     if (!api) return
     const offMute = api.onMuteToggleRequest(() => toggleMute())
     const offEnd = api.onEndCallRequest(() => endCall())
@@ -564,135 +576,150 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     ? 'Image attachments are only available with Gemini Live. Grok Voice does not support image input.'
     : undefined
 
-  const handleComposerSubmit = useCallback(async (text: string) => {
-    if (textChatCancelRef.current) {
-      textChatCancelRef.current()
-      textChatCancelRef.current = null
-      setStreamingText('')
-      setIsThinking(false)
-    }
-    const convId = await ensureConversation()
-    // Snapshot + clear any pending image attachments at submit time so they
-    // ride along with this turn rather than appearing as a separate
-    // "Attached: …" placeholder. Persist them onto the same user message so
-    // the chat history shows the image inline next to the text.
-    const attachmentsToSend = pendingAttachments
-    if (attachmentsToSend.length > 0 && attachDisabledReason) {
-      setAttachmentError(attachDisabledReason)
-      setPendingAttachments([])
-      return
-    }
-    const persisted = await addMessage(convId, 'user', text)
-    setTypedMessageIds((prev) => {
-      const next = new Set(prev)
-      next.add(persisted.id)
-      return next
-    })
-    if (attachmentsToSend.length > 0) {
-      const newAttachments: Attachment[] = []
-      const failures: string[] = []
-      for (const pending of attachmentsToSend) {
-        const result = await attachToMessage(persisted.id, pendingToAttachmentInput(pending))
-        if (result.ok) newAttachments.push(result.attachment)
-        else failures.push(`${pending.originalName ?? 'attachment'}: ${result.error}`)
-      }
-      setAttachments((prev) => [...prev, ...newAttachments])
-      setPendingAttachments([])
-      if (failures.length > 0) setAttachmentError(failures.join('  '))
-      else setAttachmentError(null)
-    }
-    await loadMessages()
-
-    if (!titleGeneratedRef.current) {
-      titleGeneratedRef.current = true
-      const title = generateTitle(text)
-      updateConversationTitle(convId, title).catch((err) =>
-        console.warn('[ChatPage] Failed to update title:', err),
-      )
-    }
-
-    if (realtimeRef.current?.isConnected) {
-      // Active call — push images first so they're in the conversation
-      // before the text turn triggers a response.
-      for (const pending of attachmentsToSend) {
-        try { realtimeRef.current.sendFrame(pending.base64, pending.mime) }
-        catch (err) { console.warn('[ChatPage] sendFrame failed:', err) }
-      }
-      const ok = realtimeRef.current.sendUserText(text)
-      if (!ok) console.warn('[ChatPage] sendUserText failed — websocket not open')
-      return
-    }
-
-    const serverUrl = (await getSetting('realtime_server_url')) || (await defaultRelayUrl())
-    const apiKey = (await getSetting('realtime_api_key')) || ''
-    if (!apiKey) {
-      await addMessage(
-        convId,
-        'assistant',
-        'Add a Brain Gateway URL and API key in Settings to chat with the assistant.',
-      )
-      await loadMessages()
-      return
-    }
-    const model = normalizeRealtimeModel(await getSetting('realtime_model'))
-    const provider = providerForModel(model)
-    const voice = await getVoiceForProvider(provider)
-    const tavilyEnabled = (await getSetting('tavily_enabled')) !== 'false'
-    const tavilyApiKey = tavilyEnabled
-      ? ((await getSetting('tavily_api_key')) || undefined)
-      : undefined
-    const voiceMode = normalizeVoiceMode(await getSetting('voice_mode'))
-    const agentBackend = normalizeAgentBackend(await getSetting('agent_backend'))
-    const recent = (await getMessages(convId))
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .slice(-20, -1)
-      .map((m) => ({ role: m.role as 'user' | 'assistant', text: m.content, timestamp: m.created_at }))
-
-    setIsThinking(true)
-    streamingRoleRef.current = 'assistant'
-    setStreamingRole('assistant')
-    textChatCancelRef.current = streamTextChat(text, {
-      serverUrl,
-      apiKey,
-      provider: provider === 'gemini' ? 'gemini' : provider === 'xai' ? 'xai' : 'openai',
-      model,
-      voice,
-      tavilyApiKey,
-      sessionKey: `voiceclaw-desktop:${convId}`,
-      conversationHistory: recent.length > 0 ? recent : undefined,
-      deviceContext: {
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        locale: navigator.language,
-        deviceModel: 'Desktop (Electron)',
-      },
-      images: attachmentsToSend.length > 0
-        ? attachmentsToSend.map((p) => ({ base64: p.base64, mimeType: p.mime }))
-        : undefined,
-      voiceMode,
-      agentBackend,
-    }, {
-      onToken: (full) => {
-        setIsThinking(false)
-        setStreamingText(full)
-      },
-      onDone: async (full) => {
+  const handleComposerSubmit = useCallback(
+    async (text: string) => {
+      if (textChatCancelRef.current) {
+        textChatCancelRef.current()
+        textChatCancelRef.current = null
         setStreamingText('')
         setIsThinking(false)
-        textChatCancelRef.current = null
-        if (full.trim()) {
-          await addMessage(convId, 'assistant', full)
-          await loadMessages()
+      }
+      const convId = await ensureConversation()
+      // Snapshot + clear any pending image attachments at submit time so they
+      // ride along with this turn rather than appearing as a separate
+      // "Attached: …" placeholder. Persist them onto the same user message so
+      // the chat history shows the image inline next to the text.
+      const attachmentsToSend = pendingAttachments
+      if (attachmentsToSend.length > 0 && attachDisabledReason) {
+        setAttachmentError(attachDisabledReason)
+        setPendingAttachments([])
+        return
+      }
+      const persisted = await addMessage(convId, 'user', text)
+      setTypedMessageIds((prev) => {
+        const next = new Set(prev)
+        next.add(persisted.id)
+        return next
+      })
+      if (attachmentsToSend.length > 0) {
+        const newAttachments: Attachment[] = []
+        const failures: string[] = []
+        for (const pending of attachmentsToSend) {
+          const result = await attachToMessage(persisted.id, pendingToAttachmentInput(pending))
+          if (result.ok) newAttachments.push(result.attachment)
+          else failures.push(`${pending.originalName ?? 'attachment'}: ${result.error}`)
         }
-      },
-      onError: async (err) => {
-        setStreamingText('')
-        setIsThinking(false)
-        textChatCancelRef.current = null
-        await addMessage(convId, 'assistant', `Error: ${err}`)
+        setAttachments((prev) => [...prev, ...newAttachments])
+        setPendingAttachments([])
+        if (failures.length > 0) setAttachmentError(failures.join('  '))
+        else setAttachmentError(null)
+      }
+      await loadMessages()
+
+      if (!titleGeneratedRef.current) {
+        titleGeneratedRef.current = true
+        const title = generateTitle(text)
+        updateConversationTitle(convId, title).catch((err) =>
+          console.warn('[ChatPage] Failed to update title:', err)
+        )
+      }
+
+      if (realtimeRef.current?.isConnected) {
+        // Active call — push images first so they're in the conversation
+        // before the text turn triggers a response.
+        for (const pending of attachmentsToSend) {
+          try {
+            realtimeRef.current.sendFrame(pending.base64, pending.mime)
+          } catch (err) {
+            console.warn('[ChatPage] sendFrame failed:', err)
+          }
+        }
+        const ok = realtimeRef.current.sendUserText(text)
+        if (!ok) console.warn('[ChatPage] sendUserText failed — websocket not open')
+        return
+      }
+
+      const serverUrl = (await getSetting('realtime_server_url')) || (await defaultRelayUrl())
+      const apiKey = (await getSetting('realtime_api_key')) || ''
+      if (!apiKey) {
+        await addMessage(
+          convId,
+          'assistant',
+          'Add a Brain Gateway URL and API key in Settings to chat with the assistant.'
+        )
         await loadMessages()
-      },
-    })
-  }, [loadMessages, pendingAttachments, attachDisabledReason])
+        return
+      }
+      const model = normalizeRealtimeModel(await getSetting('realtime_model'))
+      const provider = providerForModel(model)
+      const voice = await getVoiceForProvider(provider)
+      const tavilyEnabled = (await getSetting('tavily_enabled')) !== 'false'
+      const tavilyApiKey = tavilyEnabled
+        ? (await getSetting('tavily_api_key')) || undefined
+        : undefined
+      const voiceMode = normalizeVoiceMode(await getSetting('voice_mode'))
+      const agentBackend = normalizeAgentBackend(await getSetting('agent_backend'))
+      const recent = (await getMessages(convId))
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .slice(-20, -1)
+        .map((m) => ({
+          role: m.role as 'user' | 'assistant',
+          text: m.content,
+          timestamp: m.created_at,
+        }))
+
+      setIsThinking(true)
+      streamingRoleRef.current = 'assistant'
+      setStreamingRole('assistant')
+      textChatCancelRef.current = streamTextChat(
+        text,
+        {
+          serverUrl,
+          apiKey,
+          provider: provider === 'gemini' ? 'gemini' : provider === 'xai' ? 'xai' : 'openai',
+          model,
+          voice,
+          tavilyApiKey,
+          sessionKey: `voiceclaw-desktop:${convId}`,
+          conversationHistory: recent.length > 0 ? recent : undefined,
+          deviceContext: {
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            locale: navigator.language,
+            deviceModel: 'Desktop (Electron)',
+          },
+          images:
+            attachmentsToSend.length > 0
+              ? attachmentsToSend.map((p) => ({ base64: p.base64, mimeType: p.mime }))
+              : undefined,
+          voiceMode,
+          agentBackend,
+        },
+        {
+          onToken: (full) => {
+            setIsThinking(false)
+            setStreamingText(full)
+          },
+          onDone: async (full) => {
+            setStreamingText('')
+            setIsThinking(false)
+            textChatCancelRef.current = null
+            if (full.trim()) {
+              await addMessage(convId, 'assistant', full)
+              await loadMessages()
+            }
+          },
+          onError: async (err) => {
+            setStreamingText('')
+            setIsThinking(false)
+            textChatCancelRef.current = null
+            await addMessage(convId, 'assistant', `Error: ${err}`)
+            await loadMessages()
+          },
+        }
+      )
+    },
+    [loadMessages, pendingAttachments, attachDisabledReason]
+  )
 
   useEffect(() => {
     return () => {
@@ -714,50 +741,52 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     titleGeneratedRef.current = false
   }, [isCallActive, endCall])
 
-  const startScreenShare = useCallback(async (source: ScreenSource) => {
-    if (activeRealtimeModel.startsWith('grok-voice-')) return
-    setShowScreenPicker(false)
-    const sourceKind: 'display' | 'window' = source.id.startsWith('screen:')
-      ? 'display'
-      : 'window'
-    const capture = new ScreenCapture()
-    capture.setSourceName(source.name)
-    capture.setAnnotationProvider({
-      getStrokes: () => overlayStrokesRef.current,
-      getSourceContext: () => sourceContextRef.current,
-    })
-    screenCaptureRef.current = capture
-    try {
-      await capture.start(source.id, (frame) => {
-        if (frame.hasStrokes && frame.strokesPng) {
-          realtime.sendFrame(frame.composite, {
-            original: frame.original,
-            strokesPng: frame.strokesPng,
-          })
-        } else {
-          realtime.sendFrame(frame.composite)
-        }
+  const startScreenShare = useCallback(
+    async (source: ScreenSource) => {
+      if (activeRealtimeModel.startsWith('grok-voice-')) return
+      setShowScreenPicker(false)
+      const sourceKind: 'display' | 'window' = source.id.startsWith('screen:')
+        ? 'display'
+        : 'window'
+      const capture = new ScreenCapture()
+      capture.setSourceName(source.name)
+      capture.setAnnotationProvider({
+        getStrokes: () => overlayStrokesRef.current,
+        getSourceContext: () => sourceContextRef.current,
       })
-      setIsScreenSharing(true)
-      setScreenSourceName(source.name)
-      // For display sources the chromeMediaSourceId is "screen:<displayId>:0";
-      // pulling the displayId out and forwarding it to the overlay keeps the
-      // transparent canvas on the same monitor as the captured frame so
-      // strokes line up on multi-display setups.
-      const displayId =
-        sourceKind === 'display' ? parseDisplayIdFromSourceId(source.id) : null
-      void window.electronAPI.drawOverlay.show(displayId ?? undefined)
-      if (sourceKind === 'window') {
-        const windowId = parseWindowIdFromSourceId(source.id)
-        if (windowId !== null) {
-          startWindowBoundsPolling(windowId)
+      screenCaptureRef.current = capture
+      try {
+        await capture.start(source.id, (frame) => {
+          if (frame.hasStrokes && frame.strokesPng) {
+            realtime.sendFrame(frame.composite, {
+              original: frame.original,
+              strokesPng: frame.strokesPng,
+            })
+          } else {
+            realtime.sendFrame(frame.composite)
+          }
+        })
+        setIsScreenSharing(true)
+        setScreenSourceName(source.name)
+        // For display sources the chromeMediaSourceId is "screen:<displayId>:0";
+        // pulling the displayId out and forwarding it to the overlay keeps the
+        // transparent canvas on the same monitor as the captured frame so
+        // strokes line up on multi-display setups.
+        const displayId = sourceKind === 'display' ? parseDisplayIdFromSourceId(source.id) : null
+        void window.electronAPI.drawOverlay.show(displayId ?? undefined)
+        if (sourceKind === 'window') {
+          const windowId = parseWindowIdFromSourceId(source.id)
+          if (windowId !== null) {
+            startWindowBoundsPolling(windowId)
+          }
         }
+      } catch (err) {
+        console.error('[ChatPage] Screen capture failed:', err)
+        screenCaptureRef.current = null
       }
-    } catch (err) {
-      console.error('[ChatPage] Screen capture failed:', err)
-      screenCaptureRef.current = null
-    }
-  }, [activeRealtimeModel, realtime])
+    },
+    [activeRealtimeModel, realtime]
+  )
 
   const stopScreenShare = useCallback(() => {
     screenCaptureRef.current?.stop()
@@ -892,38 +921,39 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     }
   }, [isCallActive, isScreenSharing, stopScreenShare])
 
-  const screenShareDisabled = isConnecting || (!isScreenSharing && activeRealtimeModel.startsWith('grok-voice-'))
+  const screenShareDisabled =
+    isConnecting || (!isScreenSharing && activeRealtimeModel.startsWith('grok-voice-'))
   const screenShareTitle = isScreenSharing
     ? 'Stop screen sharing'
     : activeRealtimeModel.startsWith('grok-voice-')
       ? 'Screen sharing is only available with Gemini Live. Grok Voice does not support video input.'
       : 'Share screen'
 
-  const timelineItems = useMemo(
-    () => buildTimeline(messages, toolCalls),
-    [messages, toolCalls],
-  )
+  const timelineItems = useMemo(() => buildTimeline(messages, toolCalls), [messages, toolCalls])
 
-  const ingestFiles = useCallback(async (files: File[] | FileList) => {
-    const list = Array.from(files)
-    if (list.length === 0) return
-    if (attachDisabledReason) {
-      setAttachmentError(attachDisabledReason)
-      return
-    }
-    const accepted: PendingAttachment[] = []
-    const errors: string[] = []
-    for (const file of list) {
-      const result = await fileToPendingAttachment(file)
-      if (result.ok) accepted.push(result.pending)
-      else errors.push(`${file.name || 'attachment'}: ${result.error}`)
-    }
-    if (accepted.length > 0) {
-      setPendingAttachments((prev) => [...prev, ...accepted])
-      setAttachmentError(null)
-    }
-    if (errors.length > 0) setAttachmentError(errors.join('  '))
-  }, [attachDisabledReason])
+  const ingestFiles = useCallback(
+    async (files: File[] | FileList) => {
+      const list = Array.from(files)
+      if (list.length === 0) return
+      if (attachDisabledReason) {
+        setAttachmentError(attachDisabledReason)
+        return
+      }
+      const accepted: PendingAttachment[] = []
+      const errors: string[] = []
+      for (const file of list) {
+        const result = await fileToPendingAttachment(file)
+        if (result.ok) accepted.push(result.pending)
+        else errors.push(`${file.name || 'attachment'}: ${result.error}`)
+      }
+      if (accepted.length > 0) {
+        setPendingAttachments((prev) => [...prev, ...accepted])
+        setAttachmentError(null)
+      }
+      if (errors.length > 0) setAttachmentError(errors.join('  '))
+    },
+    [attachDisabledReason]
+  )
 
   const handlePickImage = useCallback(async () => {
     const result = await pickImageAttachment()
@@ -998,7 +1028,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       if (e.dataTransfer.files.length === 0) return
       void ingestFiles(e.dataTransfer.files)
     },
-    [ingestFiles],
+    [ingestFiles]
   )
 
   const handlePaste = useCallback(
@@ -1016,7 +1046,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       e.preventDefault()
       void ingestFiles(files)
     },
-    [ingestFiles],
+    [ingestFiles]
   )
 
   // Keyboard shortcuts: Cmd+N (new), Cmd+M (mute), Cmd+E (end call)
@@ -1050,13 +1080,12 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
 
   return (
     <div
-      className="flex-1 flex flex-col overflow-hidden relative"
+      className="relative flex flex-1 flex-col overflow-hidden"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
-      onPaste={handlePaste}
-    >
+      onPaste={handlePaste}>
       <AdapterErrorBanner
         error={adapterError}
         onDismiss={() => setAdapterError(null)}
@@ -1064,11 +1093,9 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       />
 
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-background/65 backdrop-blur">
-        <div className="text-sm text-muted-foreground">
-          {messages.length > 0
-            ? `${messages.length} messages`
-            : 'Start a conversation'}
+      <div className="border-border bg-background/65 flex items-center justify-between border-b px-4 py-2 backdrop-blur">
+        <div className="text-muted-foreground text-sm">
+          {messages.length > 0 ? `${messages.length} messages` : 'Start a conversation'}
         </div>
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="sm" onClick={newConversation}>
@@ -1079,81 +1106,79 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 relative min-h-0">
+      <div className="relative min-h-0 flex-1">
         <div
           ref={scrollContainerRef}
           onScroll={handleTranscriptScroll}
-          className="absolute inset-0 overflow-y-auto overflow-x-hidden px-4 py-4"
-        >
-        {messages.length === 0 && !isCallActive && (
-          <div className="flex h-full flex-col items-center justify-center text-center text-muted-foreground">
-            <div className="mb-5 flex size-16 items-center justify-center rounded-md border border-border bg-card text-foreground vc-panel-shadow">
-              <VoiceClawMark className="size-10" accent />
+          className="absolute inset-0 overflow-x-hidden overflow-y-auto px-4 py-4">
+          {messages.length === 0 && !isCallActive && (
+            <div className="text-muted-foreground flex h-full flex-col items-center justify-center text-center">
+              <div className="border-border bg-card text-foreground vc-panel-shadow mb-5 flex size-16 items-center justify-center rounded-md border">
+                <VoiceClawMark className="size-10" accent />
+              </div>
+              <p className="vc-font-serif text-foreground text-2xl leading-none">
+                VoiceClaw Desktop
+              </p>
+              <p className="mt-3 max-w-sm text-sm leading-6">
+                Start a call to speak with your agent through the precise voice layer.
+              </p>
             </div>
-            <p className="vc-font-serif text-2xl leading-none text-foreground">VoiceClaw Desktop</p>
-            <p className="mt-3 max-w-sm text-sm leading-6">
-              Start a call to speak with your agent through the precise voice layer.
-            </p>
-          </div>
-        )}
-        {timelineItems.map((item) => {
-          if (item.kind === 'separator') {
+          )}
+          {timelineItems.map((item) => {
+            if (item.kind === 'separator') {
+              return (
+                <MessageGroupSeparator
+                  key={`sep-${item.timestamp}-${item.label}`}
+                  label={item.label}
+                />
+              )
+            }
+            if (item.kind === 'tool') {
+              return <ToolCallRow key={`tool-${item.data.callId}`} entry={item.data} />
+            }
             return (
-              <MessageGroupSeparator
-                key={`sep-${item.timestamp}-${item.label}`}
-                label={item.label}
+              <MessageBubble
+                key={`msg-${item.data.id}`}
+                message={item.data}
+                attachments={attachmentsByMessage.get(item.data.id) ?? []}
+                showLatency={showLatency}
+                showTimestamp={showTimes}
+                isLastInBurst={item.isLastInBurst}
+                typed={typedMessageIds.has(item.data.id)}
+                onContextMenu={handleMessageContextMenu}
               />
             )
-          }
-          if (item.kind === 'tool') {
-            return <ToolCallRow key={`tool-${item.data.callId}`} entry={item.data} />
-          }
-          return (
-            <MessageBubble
-              key={`msg-${item.data.id}`}
-              message={item.data}
-              attachments={attachmentsByMessage.get(item.data.id) ?? []}
-              showLatency={showLatency}
-              showTimestamp={showTimes}
-              isLastInBurst={item.isLastInBurst}
-              typed={typedMessageIds.has(item.data.id)}
-              onContextMenu={handleMessageContextMenu}
-            />
-          )
-        })}
-        {/* Streaming text */}
-        {streamingText.trim() && (
-          <div className={`flex ${streamingRole === 'user' ? 'justify-end' : 'justify-start'} mb-3`}>
+          })}
+          {/* Streaming text */}
+          {streamingText.trim() && (
             <div
-              className={`
-                max-w-[80%] min-w-0 rounded-md px-4 py-2.5 text-sm leading-relaxed break-words
-                ${streamingRole === 'user'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-card text-foreground border border-border'
-                }
-              `}
-            >
-              <span className="whitespace-pre-wrap">{streamingText}</span>
-              <span className="inline-block w-0.5 h-4 bg-current animate-pulse ml-0.5 align-middle" />
+              className={`flex ${streamingRole === 'user' ? 'justify-end' : 'justify-start'} mb-3`}>
+              <div
+                className={`max-w-[80%] min-w-0 rounded-md px-4 py-2.5 text-sm leading-relaxed break-words ${
+                  streamingRole === 'user'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-card text-foreground border-border border'
+                } `}>
+                <span className="whitespace-pre-wrap">{streamingText}</span>
+                <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-current align-middle" />
+              </div>
             </div>
-          </div>
-        )}
-        {/* Thinking indicator */}
-        {isThinking && !streamingText.trim() && (
-          <div className="flex justify-start mb-3">
-            <div className="rounded-md border border-border bg-card px-4 py-2.5">
-              <ThinkingDots />
+          )}
+          {/* Thinking indicator */}
+          {isThinking && !streamingText.trim() && (
+            <div className="mb-3 flex justify-start">
+              <div className="border-border bg-card rounded-md border px-4 py-2.5">
+                <ThinkingDots />
+              </div>
             </div>
-          </div>
-        )}
-        <div ref={messagesEndRef} />
+          )}
+          <div ref={messagesEndRef} />
         </div>
         {!isPinnedToBottom && hasNewWhileUnpinned && (
           <button
             type="button"
             onClick={() => scrollToBottom('smooth')}
-            className="absolute bottom-3 right-4 flex items-center gap-1.5 rounded-full border border-border bg-card/95 backdrop-blur px-3 py-1.5 text-xs text-foreground shadow-md hover:bg-card transition-colors"
-          >
+            className="border-border bg-card/95 text-foreground hover:bg-card absolute right-4 bottom-3 flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs shadow-md backdrop-blur transition-colors">
             <ArrowDown size={12} />
             Jump to latest
           </button>
@@ -1162,22 +1187,22 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
 
       {/* Context usage debug strip */}
       {showContextUsage && isCallActive && usage && (
-        <div className="px-4 py-1 text-[11px] text-muted-foreground font-mono flex items-center justify-between border-t border-border">
+        <div className="text-muted-foreground border-border flex items-center justify-between border-t px-4 py-1 font-mono text-[11px]">
           <span>
             context: {formatTokens(usage.promptTokens)} /{' '}
-            {formatTokens(getContextWindowFor(activeRealtimeModel))}
-            {' '}
-            ({formatPercent(usage.promptTokens, getContextWindowFor(activeRealtimeModel))})
+            {formatTokens(getContextWindowFor(activeRealtimeModel))} (
+            {formatPercent(usage.promptTokens, getContextWindowFor(activeRealtimeModel))})
           </span>
           <span className="text-muted-foreground/70">
-            audio in {formatTokens(usage.inputAudioTokens)} · out {formatTokens(usage.outputAudioTokens)}
+            audio in {formatTokens(usage.inputAudioTokens)} · out{' '}
+            {formatTokens(usage.outputAudioTokens)}
           </span>
         </div>
       )}
 
       {/* Screen sharing indicator */}
       {isScreenSharing && (
-        <div className="px-4 py-1.5 flex items-center gap-2 text-xs text-[var(--brand-sage)]">
+        <div className="flex items-center gap-2 px-4 py-1.5 text-xs text-[var(--brand-sage)]">
           <Monitor size={14} />
           <span className="truncate">Sharing: {screenSourceName}</span>
           <div className="ml-auto flex items-center gap-3">
@@ -1189,23 +1214,20 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
                   ? 'text-[var(--brand-rust)]'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
-              title={drawMode ? 'Stop drawing' : 'Draw on screen'}
-            >
+              title={drawMode ? 'Stop drawing' : 'Draw on screen'}>
               {drawMode ? 'Drawing' : 'Draw'}
             </button>
             <button
               type="button"
               onClick={clearStrokes}
               disabled={!hasStrokes}
-              className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Clear strokes"
-            >
+              className="text-muted-foreground hover:text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              title="Clear strokes">
               Clear
             </button>
             <button
               onClick={stopScreenShare}
-              className="text-muted-foreground hover:text-destructive transition-colors"
-            >
+              className="text-muted-foreground hover:text-destructive transition-colors">
               Stop
             </button>
           </div>
@@ -1221,21 +1243,20 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
 
       {/* Connection error */}
       {connectionError && (
-        <div className="mx-4 mt-2 px-3 py-2 rounded-md bg-destructive/10 text-destructive text-sm text-center">
+        <div className="bg-destructive/10 text-destructive mx-4 mt-2 rounded-md px-3 py-2 text-center text-sm">
           {connectionError}
         </div>
       )}
 
       {/* Attachment validation error */}
       {attachmentError && (
-        <div className="mx-4 mt-2 px-3 py-2 rounded-md bg-destructive/10 text-destructive text-sm text-center flex items-start justify-between gap-2">
+        <div className="bg-destructive/10 text-destructive mx-4 mt-2 flex items-start justify-between gap-2 rounded-md px-3 py-2 text-center text-sm">
           <span className="flex-1 text-left">{attachmentError}</span>
           <button
             type="button"
             onClick={() => setAttachmentError(null)}
             className="text-muted-foreground hover:text-destructive"
-            aria-label="Dismiss attachment error"
-          >
+            aria-label="Dismiss attachment error">
             <Plus size={14} className="rotate-45" />
           </button>
         </div>
@@ -1257,12 +1278,9 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       />
 
       {/* Call controls */}
-      <div className="px-4 py-3 border-t border-border flex items-center justify-center gap-3">
+      <div className="border-border flex items-center justify-center gap-3 border-t px-4 py-3">
         {!isCallActive && !isConnecting ? (
-          <Button
-            onClick={startCall}
-            className="px-6"
-          >
+          <Button onClick={startCall} className="px-6">
             <Phone size={18} className="mr-2" />
             Start Call
           </Button>
@@ -1272,8 +1290,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
               variant="ghost"
               size="icon"
               onClick={toggleMute}
-              className={isMuted ? 'text-destructive' : 'text-foreground'}
-            >
+              className={isMuted ? 'text-destructive' : 'text-foreground'}>
               {isMuted ? <MicOff size={20} /> : <Mic size={20} />}
             </Button>
             <span title={screenShareTitle} className="inline-flex">
@@ -1281,9 +1298,14 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
                 variant="ghost"
                 size="icon"
                 onClick={isScreenSharing ? stopScreenShare : () => setShowScreenPicker(true)}
-                className={isScreenSharing ? 'text-[var(--brand-sage)]' : screenShareDisabled ? 'text-muted-foreground opacity-50' : 'text-foreground'}
-                disabled={screenShareDisabled}
-              >
+                className={
+                  isScreenSharing
+                    ? 'text-[var(--brand-sage)]'
+                    : screenShareDisabled
+                      ? 'text-muted-foreground opacity-50'
+                      : 'text-foreground'
+                }
+                disabled={screenShareDisabled}>
                 {isScreenSharing ? <MonitorOff size={20} /> : <Monitor size={20} />}
               </Button>
             </span>
@@ -1294,19 +1316,16 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
               onMutedChange={handleOutputMutedChange}
             />
 
-            <Button
-              variant="destructive"
-              size="icon"
-              onClick={endCall}
-              disabled={isConnecting}
-            >
+            <Button variant="destructive" size="icon" onClick={endCall} disabled={isConnecting}>
               <PhoneOff size={20} />
             </Button>
             {isConnecting && (
-              <span className="text-sm text-muted-foreground animate-pulse">Connecting...</span>
+              <span className="text-muted-foreground animate-pulse text-sm">Connecting...</span>
             )}
             {realtime.isReconnecting && (
-              <span className="text-sm text-[var(--brand-sage)] animate-pulse">Reconnecting...</span>
+              <span className="animate-pulse text-sm text-[var(--brand-sage)]">
+                Reconnecting...
+              </span>
             )}
           </>
         )}
@@ -1330,17 +1349,17 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
             showTimes,
             handleCopyMessage,
             handleDeleteMessage,
-            handleToggleShowTimes,
+            handleToggleShowTimes
           )}
         />
       )}
 
       {isDraggingFile && (
-        <div className="absolute inset-0 z-50 pointer-events-none flex items-center justify-center bg-background/80 backdrop-blur-sm border-2 border-dashed border-primary rounded-md">
+        <div className="bg-background/80 border-primary pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-md border-2 border-dashed backdrop-blur-sm">
           <div className="text-center">
-            <ImagePlus size={36} className="mx-auto text-primary mb-3" />
-            <p className="text-base font-medium text-foreground">Drop image to attach</p>
-            <p className="text-xs text-muted-foreground mt-1">PNG · JPG · WEBP · up to 10MB</p>
+            <ImagePlus size={36} className="text-primary mx-auto mb-3" />
+            <p className="text-foreground text-base font-medium">Drop image to attach</p>
+            <p className="text-muted-foreground mt-1 text-xs">PNG · JPG · WEBP · up to 10MB</p>
           </div>
         </div>
       )}
@@ -1362,7 +1381,7 @@ function buildMessageMenuItems(
   showTimes: boolean,
   onCopy: (m: Message) => void,
   onDelete: (m: Message) => void,
-  onToggleShowTimes: () => void,
+  onToggleShowTimes: () => void
 ): MessageContextMenuItem[] {
   return [
     {
@@ -1439,14 +1458,14 @@ function generateTitle(text: string): string {
   return title.trim() + '...'
 }
 
-function normalizeRealtimeModel(model: string | null): typeof REALTIME_MODELS[number] {
+function normalizeRealtimeModel(model: string | null): (typeof REALTIME_MODELS)[number] {
   return (REALTIME_MODELS as readonly string[]).includes(model ?? '')
-    ? model as typeof REALTIME_MODELS[number]
+    ? (model as (typeof REALTIME_MODELS)[number])
     : DEFAULT_REALTIME_MODEL
 }
 
-const VOICE_MODES = ['direct', 'operator', 'supervisor'] as const
-type VoiceMode = typeof VOICE_MODES[number]
+const VOICE_MODES = ['direct', 'operator', 'supervisor', 'stt-tts-harness'] as const
+type VoiceMode = (typeof VOICE_MODES)[number]
 const DEFAULT_VOICE_MODE: VoiceMode = 'direct'
 
 function normalizeVoiceMode(value: string | null): VoiceMode {
@@ -1455,8 +1474,43 @@ function normalizeVoiceMode(value: string | null): VoiceMode {
     : DEFAULT_VOICE_MODE
 }
 
+// An incomplete Harness selection is a visible failure, never a Pipeline switch.
+async function resolveHarnessSelection(
+  voiceMode: VoiceMode
+): Promise<{ config: Record<string, unknown>; unavailable?: string }> {
+  if (voiceMode !== 'stt-tts-harness') return { config: {} }
+
+  const selection = new STTTTSHarnessSelection()
+  selection.selectPipeline('stt-tts-harness')
+  const providerId = ((await getSetting('harness_provider_id')) || '').trim()
+  const workspaceBindingId = ((await getSetting('harness_workspace_binding_id')) || '').trim()
+  const bindingId = ((await getSetting('harness_binding_id')) || '').trim()
+  if (providerId) selection.selectProvider(providerId)
+  if (workspaceBindingId) selection.selectWorkspace(workspaceBindingId)
+
+  const snapshot = selection.snapshot()
+  // Without a Host projection the client cannot know live readiness, so local
+  // completeness is the gate and the Relay refuses an unavailable binding.
+  if (snapshot.pipeline !== 'stt-tts-harness' || !providerId || !workspaceBindingId || !bindingId) {
+    return {
+      config: {},
+      unavailable:
+        'STT/TTS Harness needs a Provider, Workspace, and binding in Settings before starting a call. Recovery: ' +
+        (snapshot.recovery.join(', ') || 'select-provider, select-workspace, select-binding') +
+        '.',
+    }
+  }
+  return {
+    config: {
+      mode: 'stt-tts',
+      voiceMode: 'direct',
+      harnessBinding: { bindingId, providerId, workspaceBindingId },
+    },
+  }
+}
+
 const AGENT_BACKENDS = ['pi', 'openai', 'hermes'] as const
-type AgentBackend = typeof AGENT_BACKENDS[number]
+type AgentBackend = (typeof AGENT_BACKENDS)[number]
 const DEFAULT_AGENT_BACKEND: AgentBackend = 'pi'
 
 function normalizeAgentBackend(value: string | null): AgentBackend {

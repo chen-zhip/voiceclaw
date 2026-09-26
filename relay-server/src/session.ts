@@ -79,7 +79,8 @@ export class RelaySession {
   constructor(
     ws: WebSocket,
     private readonly adapterFactory: SessionAdapterFactory = createAdapter,
-    private readonly thinkingData: ThinkingDataManager = getThinkingStorage()
+    private readonly thinkingData: ThinkingDataManager = getThinkingStorage(),
+    private readonly harnessRouting?: AdapterFactoryDependencies['harnessRouting']
   ) {
     this.ws = ws
     this.ws.on('message', (raw) => this.handleMessage(raw))
@@ -1273,6 +1274,7 @@ export class RelaySession {
     try {
       const sendToClient = (event: RelayEvent) => this.handleRelayEvent(event)
       this.adapter = this.adapterFactory(config, {
+        harnessRouting: this.harnessRouting,
         sendToClient,
         attachThinking: (thinking, turnId) =>
           this.tracer.attachThinking(thinking, turnId, [
@@ -1318,7 +1320,7 @@ export class RelaySession {
     await this.finalizeSessionMedia().catch(() => undefined)
     await this.media.endSession().catch(() => undefined)
     this.tracer.endSession()
-    this.syncTranscriptToBrain()
+    if (this.config?.mode !== 'stt-tts') this.syncTranscriptToBrain()
     this.adapter?.disconnect()
     this.adapter = null
   }
