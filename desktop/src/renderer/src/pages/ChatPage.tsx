@@ -20,11 +20,13 @@ import {
   Phone,
   PhoneOff,
   Plus,
+  Square,
   Trash2,
 } from 'lucide-react'
 import { Button } from '../components/ui/Button'
 import { AttachmentTray } from '../components/AttachmentTray'
 import { ChatComposer } from '../components/ChatComposer'
+import { AssistantOutputPanel } from '../components/AssistantOutputPanel'
 import { MessageBubble } from '../components/MessageBubble'
 import { MessageContextMenu, type MessageContextMenuItem } from '../components/MessageContextMenu'
 import { MessageGroupSeparator } from '../components/MessageGroupSeparator'
@@ -35,6 +37,7 @@ import { ScreenSharePicker } from '../components/ScreenSharePicker'
 import { VolumeControl } from '../components/VolumeControl'
 import { ToolCallRow } from '../components/ToolCallRow'
 import { AdapterErrorBanner } from '../components/AdapterErrorBanner'
+import { PageContentColumn, PageHeader, PageSurface } from '../components/layout/PageLayout'
 import {
   ScreenCapture,
   type DisplayBounds,
@@ -44,7 +47,8 @@ import {
   type WindowBounds,
 } from '../lib/screen-capture'
 import { useRealtime, type RealtimeCallbacks, type AdapterErrorPayload } from '../lib/use-realtime'
-import { STTTTSHarnessSelection } from '../lib/stt-tts-harness-selection'
+import { readHarnessSessionConfig, voiceclawSessionKey } from '../lib/stt-tts-harness-config'
+import { projectHarnessWindowEvent } from '../lib/harness-window-events'
 import { captureRenderer } from '../lib/telemetry'
 import { useConversationContext } from '../lib/conversation-context'
 import {
@@ -89,26 +93,46 @@ const REALTIME_MODELS = [
 
 interface ChatPageProps {
   onNavigateToSettings?: () => void
+  isActive?: boolean
+  newConversationRequestId?: number
+  previewVoiceState?: 'connecting' | 'active'
 }
 
-export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
+export function ChatPage({
+  onNavigateToSettings,
+  isActive = true,
+  newConversationRequestId = 0,
+  previewVoiceState,
+}: ChatPageProps = {}) {
   const [messages, setMessages] = useState<Message[]>([])
+  const [composerResetKey, setComposerResetKey] = useState(0)
   const [toolCalls, setToolCalls] = useState<ToolCallEntry[]>([])
   const [conversationId, setConversationId] = useState<number | null>(null)
   const conversationIdRef = useRef<number | null>(null)
+  const handledNewConversationRequestRef = useRef(0)
   const titleGeneratedRef = useRef(false)
-  const [isCallActive, setIsCallActive] = useState(false)
+  const [isCallActive, setIsCallActive] = useState(previewVoiceState === 'active')
   const [isMuted, setIsMuted] = useState(false)
   const [outputGain, setOutputGain] = useState(1)
   const [baseVolume, setBaseVolume] = useState(1)
   const [outputMuted, setOutputMuted] = useState(false)
-  const [isConnecting, setIsConnecting] = useState(false)
+  const [isConnecting, setIsConnecting] = useState(previewVoiceState === 'connecting')
   const [isThinking, setIsThinking] = useState(false)
+  const [isHarnessTurnActive, setIsHarnessTurnActive] = useState(false)
   const [streamingText, setStreamingText] = useState('')
   const [streamingRole, setStreamingRole] = useState<'user' | 'assistant'>('assistant')
+  const [idleVoiceMode, setIdleVoiceMode] = useState<VoiceMode>('direct')
+  const [activeVoiceMode, setActiveVoiceMode] = useState<VoiceMode | null>(
+    previewVoiceState ? 'direct' : null
+  )
+  const [screenMarker, setScreenMarker] = useState<{
+    target: string
+    mode: 'look' | 'highlight'
+  } | null>(null)
   // Synchronous mirror of streamingRole — IPC callbacks need to read the
   // current role outside of a setState updater since updaters must stay pure.
   const streamingRoleRef = useRef<'user' | 'assistant'>('assistant')
+  const harnessPublicTextRef = useRef('')
   const [showLatency, setShowLatency] = useState(false)
   const [showContextUsage, setShowContextUsage] = useState(false)
   const [usage, setUsage] = useState<{
@@ -297,13 +321,24 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     titleGeneratedRef.current = msgs.length > 0
   }
 
-  const ensureConversation = async (): Promise<number> => {
+  const ensureConversation = useCallback(async (): Promise<number> => {
     if (conversationIdRef.current) return conversationIdRef.current
     const conv = await createConversation()
     conversationIdRef.current = conv.id
     setConversationId(conv.id)
     return conv.id
-  }
+  }, [])
+
+  useEffect(() => {
+    if (!isActive) return
+    let cancelled = false
+    getSetting('voice_mode').then((value) => {
+      if (!cancelled) setIdleVoiceMode(normalizeVoiceMode(value))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [isActive])
 
   const realtimeCallbacks: RealtimeCallbacks = {
     onSessionReady: () => {
@@ -321,11 +356,14 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       if (role === 'assistant') setIsThinking(false)
     },
     onTranscriptDone: async (text, role) => {
-      setStreamingText('')
-      if (!text.trim()) return
+      if (!text.trim()) {
+        setStreamingText('')
+        return
+      }
       const convId = await ensureConversation()
       await addMessage(convId, role, text)
       await loadMessages()
+      setStreamingText('')
 
       if (role === 'user' && !titleGeneratedRef.current) {
         titleGeneratedRef.current = true
@@ -335,13 +373,57 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
         )
       }
     },
+    onHarnessEvent: (event) => {
+      if (event.type === 'harness.tts-failed' && typeof event.message === 'string') {
+        setConnectionError(event.message)
+        return
+      }
+      if (event.type === 'harness.terminal') {
+        setIsHarnessTurnActive(false)
+        const outcome =
+          typeof event.outcome === 'object' && event.outcome !== null
+            ? (event.outcome as Record<string, unknown>).outcome
+            : undefined
+        if (outcome === 'unknown' || outcome === 'outcome-unknown') {
+          setConnectionError(
+            'Turn outcome is unknown. Check the Codex thread before retrying; this turn will not replay automatically.'
+          )
+        }
+        const text = harnessPublicTextRef.current
+        harnessPublicTextRef.current = ''
+        if (text.trim()) {
+          void (async () => {
+            const convId = await ensureConversation()
+            await addMessage(convId, 'assistant', text)
+            await loadMessages()
+            if (!harnessPublicTextRef.current) setStreamingText('')
+          })().catch((err) => console.warn('[ChatPage] Failed to save Harness output:', err))
+        }
+        return
+      }
+      const projection = projectHarnessWindowEvent(event)
+      if (!projection) return
+      if (projection.kind === 'text') {
+        harnessPublicTextRef.current += projection.text
+        streamingRoleRef.current = 'assistant'
+        setStreamingRole('assistant')
+        setStreamingText((prev) => prev + projection.text)
+        setIsThinking(false)
+      } else {
+        setScreenMarker({ target: projection.target, mode: projection.mode })
+      }
+    },
     onTurnStarted: () => {
+      setIsHarnessTurnActive(true)
+      harnessPublicTextRef.current = ''
       setIsThinking(false)
       setStreamingText('')
+      setScreenMarker(null)
       streamingRoleRef.current = 'user'
       setStreamingRole('user')
     },
     onTurnEnded: () => {
+      setIsHarnessTurnActive(false)
       setIsThinking(false)
     },
     onToolCall: async (callId, name, args) => {
@@ -386,19 +468,26 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       await loadMessages()
     },
     onSessionEnded: () => {
+      setIsHarnessTurnActive(false)
       setIsCallActive(false)
+      setActiveVoiceMode(null)
       setIsThinking(false)
       setStreamingText('')
+      setScreenMarker(null)
       streamingRoleRef.current = 'assistant'
     },
     onDisconnect: () => {
+      setIsHarnessTurnActive(false)
       setIsCallActive(false)
       setIsConnecting(false)
+      setActiveVoiceMode(null)
       setIsThinking(false)
       setStreamingText('')
+      setScreenMarker(null)
       streamingRoleRef.current = 'assistant'
     },
     onError: (message, code, payload) => {
+      setIsHarnessTurnActive(false)
       console.error('[ChatPage] Relay error:', message)
       if (code === 401) {
         captureRenderer('relay_unauthorized', { relay_url: activeRelayUrlRef.current })
@@ -410,6 +499,10 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
       }
       setIsConnecting(false)
       setIsCallActive(false)
+      setIsThinking(false)
+      setStreamingText('')
+      setScreenMarker(null)
+      setActiveVoiceMode(null)
       realtimeRef.current?.stop()
     },
     onUsage: (snapshot) => {
@@ -460,27 +553,27 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     const inputDeviceId = (await getSetting('input_device_id')) || undefined
     const outputDeviceId = (await getSetting('output_device_id')) || undefined
     const voiceMode = normalizeVoiceMode(await getSetting('voice_mode'))
+    setActiveVoiceMode(voiceMode)
     const agentBackend = normalizeAgentBackend(await getSetting('agent_backend'))
     // Explicit STT/TTS Harness entry: the Relay only dispatches finalized
     // speech once the user has selected a Provider, Workspace, and binding.
     const harnessSelection = await resolveHarnessSelection(voiceMode)
     if (harnessSelection.unavailable) {
       setIsConnecting(false)
+      setActiveVoiceMode(null)
       setConnectionError(harnessSelection.unavailable)
       return
     }
 
-    const convId = conversationIdRef.current
-    const conversationHistory = convId
-      ? (await getMessages(convId))
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .slice(-200)
-          .map((m) => ({
-            role: m.role as 'user' | 'assistant',
-            text: m.content,
-            timestamp: m.created_at,
-          }))
-      : []
+    const convId = await ensureConversation()
+    const conversationHistory = (await getMessages(convId))
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .slice(-200)
+      .map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        text: m.content,
+        timestamp: m.created_at,
+      }))
 
     setActiveRealtimeModel(model)
     realtime.start({
@@ -499,12 +592,13 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
         deviceModel: 'Desktop (Electron)',
       },
       conversationHistory: conversationHistory.length > 0 ? conversationHistory : undefined,
+      sessionKey: voiceclawSessionKey(convId),
       tracingEnabled,
       voiceMode,
       agentBackend,
       ...harnessSelection.config,
     })
-  }, [realtime, outputGain])
+  }, [ensureConversation, realtime, outputGain])
 
   useEffect(() => {
     if (greetingTriggeredRef.current) return
@@ -521,8 +615,10 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
 
   const endCall = useCallback(() => {
     realtime.stop()
+    setIsHarnessTurnActive(false)
     setIsCallActive(false)
     setIsConnecting(false)
+    setActiveVoiceMode(null)
     setIsThinking(false)
     setStreamingText('')
     setIsMuted(false)
@@ -669,6 +765,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
         }))
 
       setIsThinking(true)
+      setActiveVoiceMode(voiceMode)
       streamingRoleRef.current = 'assistant'
       setStreamingRole('assistant')
       textChatCancelRef.current = streamTextChat(
@@ -680,7 +777,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
           model,
           voice,
           tavilyApiKey,
-          sessionKey: `voiceclaw-desktop:${convId}`,
+          sessionKey: voiceclawSessionKey(convId),
           conversationHistory: recent.length > 0 ? recent : undefined,
           deviceContext: {
             timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -700,17 +797,19 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
             setStreamingText(full)
           },
           onDone: async (full) => {
-            setStreamingText('')
             setIsThinking(false)
             textChatCancelRef.current = null
             if (full.trim()) {
               await addMessage(convId, 'assistant', full)
               await loadMessages()
             }
+            setStreamingText('')
+            setActiveVoiceMode(null)
           },
           onError: async (err) => {
             setStreamingText('')
             setIsThinking(false)
+            setActiveVoiceMode(null)
             textChatCancelRef.current = null
             await addMessage(convId, 'assistant', `Error: ${err}`)
             await loadMessages()
@@ -738,8 +837,15 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     setAttachmentError(null)
     setToolCalls([])
     setTypedMessageIds(new Set())
+    setComposerResetKey((key) => key + 1)
     titleGeneratedRef.current = false
   }, [isCallActive, endCall])
+
+  useEffect(() => {
+    if (newConversationRequestId <= handledNewConversationRequestRef.current) return
+    handledNewConversationRequestRef.current = newConversationRequestId
+    newConversation()
+  }, [newConversation, newConversationRequestId])
 
   const startScreenShare = useCallback(
     async (source: ScreenSource) => {
@@ -1051,6 +1157,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
 
   // Keyboard shortcuts: Cmd+N (new), Cmd+M (mute), Cmd+E (end call)
   useEffect(() => {
+    if (!isActive) return
     const handler = (e: KeyboardEvent) => {
       const meta = e.metaKey || e.ctrlKey
       if (!meta) return
@@ -1076,11 +1183,14 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [isCallActive, newConversation, toggleMute, endCall])
+  }, [isActive, isCallActive, newConversation, toggleMute, endCall])
+
+  const effectiveVoiceMode = activeVoiceMode ?? idleVoiceMode
 
   return (
-    <div
-      className="relative flex flex-1 flex-col overflow-hidden"
+    <PageSurface
+      accessibleName="Conversation workspace"
+      className="relative"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
@@ -1092,25 +1202,32 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
         onNavigateToSettings={onNavigateToSettings}
       />
 
-      {/* Header */}
-      <div className="border-border bg-background/65 flex items-center justify-between border-b px-4 py-2 backdrop-blur">
-        <div className="text-muted-foreground text-sm">
-          {messages.length > 0 ? `${messages.length} messages` : 'Start a conversation'}
-        </div>
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" onClick={newConversation}>
-            <Plus size={16} className="mr-1" />
-            New
-          </Button>
-        </div>
-      </div>
+      <PageHeader compact divided={false} className="drag-region">
+        <PageContentColumn className="flex items-center justify-between">
+          <div className="text-foreground text-sm font-medium">
+            {messages.length > 0 ? 'Conversation' : 'New conversation'}
+            <span className="text-muted-foreground ml-2 text-xs font-normal">
+              {messages.length > 0 ? `${messages.length} messages` : 'Ready when you are'}
+            </span>
+          </div>
+          <div className="no-drag flex items-center gap-1">
+            <Button variant="ghost" size="sm" onClick={newConversation}>
+              <Plus size={16} className="mr-1" />
+              New
+            </Button>
+          </div>
+        </PageContentColumn>
+      </PageHeader>
 
       {/* Messages */}
       <div className="relative min-h-0 flex-1">
-        <div
+        <PageContentColumn
+          role="log"
+          aria-label="Conversation transcript"
+          aria-live="polite"
           ref={scrollContainerRef}
           onScroll={handleTranscriptScroll}
-          className="absolute inset-0 overflow-x-hidden overflow-y-auto px-4 py-4">
+          className="absolute inset-y-0 left-1/2 -translate-x-1/2 overflow-x-hidden overflow-y-auto px-5 py-5">
           {messages.length === 0 && !isCallActive && (
             <div className="text-muted-foreground flex h-full flex-col items-center justify-center text-center">
               <div className="border-border bg-card text-foreground vc-panel-shadow mb-5 flex size-16 items-center justify-center rounded-md border">
@@ -1136,6 +1253,19 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
             if (item.kind === 'tool') {
               return <ToolCallRow key={`tool-${item.data.callId}`} entry={item.data} />
             }
+            if (effectiveVoiceMode === 'stt-tts-harness' && item.data.role === 'assistant') {
+              return (
+                <AssistantOutputPanel
+                  key={`msg-${item.data.id}`}
+                  message={item.data}
+                  attachments={attachmentsByMessage.get(item.data.id) ?? []}
+                  showLatency={showLatency}
+                  showTimestamp={showTimes}
+                  isLastInBurst={item.isLastInBurst}
+                  onContextMenu={handleMessageContextMenu}
+                />
+              )
+            }
             return (
               <MessageBubble
                 key={`msg-${item.data.id}`}
@@ -1150,30 +1280,46 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
             )
           })}
           {/* Streaming text */}
-          {streamingText.trim() && (
-            <div
-              className={`flex ${streamingRole === 'user' ? 'justify-end' : 'justify-start'} mb-3`}>
+          {streamingText.trim() &&
+            (effectiveVoiceMode === 'stt-tts-harness' && streamingRole === 'assistant' ? (
+              <AssistantOutputPanel text={streamingText} streaming />
+            ) : (
               <div
-                className={`max-w-[80%] min-w-0 rounded-md px-4 py-2.5 text-sm leading-relaxed break-words ${
-                  streamingRole === 'user'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-card text-foreground border-border border'
-                } `}>
-                <span className="whitespace-pre-wrap">{streamingText}</span>
-                <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-current align-middle" />
+                className={`flex ${streamingRole === 'user' ? 'justify-end' : 'justify-start'} mb-3`}>
+                <div
+                  className={`max-w-[80%] min-w-0 rounded-md px-4 py-2.5 text-sm leading-relaxed break-words ${
+                    streamingRole === 'user'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-card text-foreground border-border border'
+                  } `}>
+                  <span className="whitespace-pre-wrap">{streamingText}</span>
+                  <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-current align-middle" />
+                </div>
               </div>
+            ))}
+          {screenMarker && (
+            <div
+              data-testid="harness-screen-marker"
+              className="text-muted-foreground mb-3 flex items-center gap-2 text-xs">
+              <span className="text-foreground font-medium">标记</span>
+              <span className="rounded border px-1.5 py-0.5 font-mono">{screenMarker.target}</span>
+              <span>{screenMarker.mode === 'highlight' ? '高亮' : '查看'}</span>
             </div>
           )}
           {/* Thinking indicator */}
-          {isThinking && !streamingText.trim() && (
-            <div className="mb-3 flex justify-start">
-              <div className="border-border bg-card rounded-md border px-4 py-2.5">
-                <ThinkingDots />
+          {isThinking &&
+            !streamingText.trim() &&
+            (effectiveVoiceMode === 'stt-tts-harness' ? (
+              <AssistantOutputPanel waiting />
+            ) : (
+              <div className="mb-3 flex justify-start">
+                <div className="border-border bg-card rounded-md border px-4 py-2.5">
+                  <ThinkingDots />
+                </div>
               </div>
-            </div>
-          )}
+            ))}
           <div ref={messagesEndRef} />
-        </div>
+        </PageContentColumn>
         {!isPinnedToBottom && hasNewWhileUnpinned && (
           <button
             type="button"
@@ -1241,95 +1387,123 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
         </div>
       )}
 
-      {/* Connection error */}
-      {connectionError && (
-        <div className="bg-destructive/10 text-destructive mx-4 mt-2 rounded-md px-3 py-2 text-center text-sm">
-          {connectionError}
-        </div>
-      )}
+      <PageContentColumn
+        role="form"
+        aria-label="Message composer"
+        className="shrink-0 px-4 pt-2 pb-4">
+        {connectionError && (
+          <div
+            role="alert"
+            className="bg-destructive/10 text-destructive mb-2 rounded-2xl px-4 py-2.5 text-sm">
+            {connectionError}
+          </div>
+        )}
 
-      {/* Attachment validation error */}
-      {attachmentError && (
-        <div className="bg-destructive/10 text-destructive mx-4 mt-2 flex items-start justify-between gap-2 rounded-md px-3 py-2 text-center text-sm">
-          <span className="flex-1 text-left">{attachmentError}</span>
-          <button
-            type="button"
-            onClick={() => setAttachmentError(null)}
-            className="text-muted-foreground hover:text-destructive"
-            aria-label="Dismiss attachment error">
-            <Plus size={14} className="rotate-45" />
-          </button>
-        </div>
-      )}
+        {attachmentError && (
+          <div
+            role="alert"
+            className="bg-destructive/10 text-destructive mb-2 flex items-start justify-between gap-2 rounded-2xl px-4 py-2.5 text-sm">
+            <span className="flex-1">{attachmentError}</span>
+            <button
+              type="button"
+              onClick={() => setAttachmentError(null)}
+              className="text-muted-foreground hover:text-destructive"
+              aria-label="Dismiss attachment error">
+              <Plus size={14} className="rotate-45" />
+            </button>
+          </div>
+        )}
 
-      {/* Pending attachments tray */}
-      <AttachmentTray
-        pending={pendingAttachments}
-        onRemove={handleRemovePending}
-        onSend={handleSendAttachments}
-        sending={sendingAttachments}
-      />
+        {/* Pending attachments tray */}
+        <AttachmentTray
+          pending={pendingAttachments}
+          onRemove={handleRemovePending}
+          onSend={handleSendAttachments}
+          sending={sendingAttachments}
+        />
 
-      {/* Typed text composer — always visible, works in and out of call */}
-      <ChatComposer
-        onSubmit={handleComposerSubmit}
-        onAttach={handlePickImage}
-        attachDisabledReason={attachDisabledReason}
-      />
+        {/* Typed text composer — always visible, works in and out of call */}
+        <ChatComposer
+          key={composerResetKey}
+          onSubmit={handleComposerSubmit}
+          onAttach={handlePickImage}
+          attachDisabledReason={attachDisabledReason}
+        />
 
-      {/* Call controls */}
-      <div className="border-border flex items-center justify-center gap-3 border-t px-4 py-3">
-        {!isCallActive && !isConnecting ? (
-          <Button onClick={startCall} className="px-6">
-            <Phone size={18} className="mr-2" />
-            Start Call
-          </Button>
-        ) : (
-          <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggleMute}
-              className={isMuted ? 'text-destructive' : 'text-foreground'}>
-              {isMuted ? <MicOff size={20} /> : <Mic size={20} />}
+        {/* Call controls */}
+        {(isCallActive || isConnecting) && (
+          <div aria-hidden="true" className="vc-signal-line mx-5 h-px bg-[var(--shell-signal)]" />
+        )}
+        <div className="flex min-h-12 items-center justify-center gap-3 px-3 py-2">
+          {!isCallActive && !isConnecting ? (
+            <Button onClick={startCall} className="px-6">
+              <Phone size={18} className="mr-2" />
+              Start Call
             </Button>
-            <span title={screenShareTitle} className="inline-flex">
+          ) : (
+            <>
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={isScreenSharing ? stopScreenShare : () => setShowScreenPicker(true)}
-                className={
-                  isScreenSharing
-                    ? 'text-[var(--brand-sage)]'
-                    : screenShareDisabled
-                      ? 'text-muted-foreground opacity-50'
-                      : 'text-foreground'
-                }
-                disabled={screenShareDisabled}>
-                {isScreenSharing ? <MonitorOff size={20} /> : <Monitor size={20} />}
+                onClick={toggleMute}
+                aria-label={isMuted ? 'Unmute microphone' : 'Mute microphone'}
+                className={isMuted ? 'text-destructive' : 'text-foreground'}>
+                {isMuted ? <MicOff size={20} /> : <Mic size={20} />}
               </Button>
-            </span>
-            <VolumeControl
-              volume={outputGain}
-              muted={outputMuted}
-              onVolumeChange={handleOutputGainChange}
-              onMutedChange={handleOutputMutedChange}
-            />
-
-            <Button variant="destructive" size="icon" onClick={endCall} disabled={isConnecting}>
-              <PhoneOff size={20} />
-            </Button>
-            {isConnecting && (
-              <span className="text-muted-foreground animate-pulse text-sm">Connecting...</span>
-            )}
-            {realtime.isReconnecting && (
-              <span className="animate-pulse text-sm text-[var(--brand-sage)]">
-                Reconnecting...
+              <span title={screenShareTitle} className="inline-flex">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={isScreenSharing ? 'Stop sharing screen' : 'Share screen'}
+                  onClick={isScreenSharing ? stopScreenShare : () => setShowScreenPicker(true)}
+                  className={
+                    isScreenSharing
+                      ? 'text-[var(--brand-sage)]'
+                      : screenShareDisabled
+                        ? 'text-muted-foreground opacity-50'
+                        : 'text-foreground'
+                  }
+                  disabled={screenShareDisabled}>
+                  {isScreenSharing ? <MonitorOff size={20} /> : <Monitor size={20} />}
+                </Button>
               </span>
-            )}
-          </>
-        )}
-      </div>
+              <VolumeControl
+                volume={outputGain}
+                muted={outputMuted}
+                onVolumeChange={handleOutputGainChange}
+                onMutedChange={handleOutputMutedChange}
+              />
+
+              {effectiveVoiceMode === 'stt-tts-harness' && isHarnessTurnActive && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Cancel turn"
+                  onClick={realtime.cancelHarnessTurn}>
+                  <Square size={18} />
+                </Button>
+              )}
+
+              <Button
+                variant="destructive"
+                size="icon"
+                aria-label="End call"
+                onClick={endCall}
+                disabled={isConnecting}>
+                <PhoneOff size={20} />
+              </Button>
+              {isConnecting && (
+                <span className="text-muted-foreground animate-pulse text-sm">Connecting...</span>
+              )}
+              {realtime.isReconnecting && (
+                <span className="animate-pulse text-sm text-[var(--brand-sage)]">
+                  Reconnecting...
+                </span>
+              )}
+            </>
+          )}
+        </div>
+      </PageContentColumn>
 
       {/* Screen share picker modal */}
       {showScreenPicker && (
@@ -1363,7 +1537,7 @@ export function ChatPage({ onNavigateToSettings }: ChatPageProps = {}) {
           </div>
         </div>
       )}
-    </div>
+    </PageSurface>
   )
 }
 
@@ -1480,33 +1654,11 @@ async function resolveHarnessSelection(
 ): Promise<{ config: Record<string, unknown>; unavailable?: string }> {
   if (voiceMode !== 'stt-tts-harness') return { config: {} }
 
-  const selection = new STTTTSHarnessSelection()
-  selection.selectPipeline('stt-tts-harness')
-  const providerId = ((await getSetting('harness_provider_id')) || '').trim()
-  const workspaceBindingId = ((await getSetting('harness_workspace_binding_id')) || '').trim()
-  const bindingId = ((await getSetting('harness_binding_id')) || '').trim()
-  if (providerId) selection.selectProvider(providerId)
-  if (workspaceBindingId) selection.selectWorkspace(workspaceBindingId)
-
-  const snapshot = selection.snapshot()
-  // Without a Host projection the client cannot know live readiness, so local
-  // completeness is the gate and the Relay refuses an unavailable binding.
-  if (snapshot.pipeline !== 'stt-tts-harness' || !providerId || !workspaceBindingId || !bindingId) {
-    return {
-      config: {},
-      unavailable:
-        'STT/TTS Harness needs a Provider, Workspace, and binding in Settings before starting a call. Recovery: ' +
-        (snapshot.recovery.join(', ') || 'select-provider, select-workspace, select-binding') +
-        '.',
-    }
-  }
-  return {
-    config: {
-      mode: 'stt-tts',
-      voiceMode: 'direct',
-      harnessBinding: { bindingId, providerId, workspaceBindingId },
-    },
-  }
+  // Local completeness is the gate; the Relay refuses an unavailable binding.
+  const result = await readHarnessSessionConfig(getSetting)
+  return 'unavailable' in result
+    ? { config: {}, unavailable: result.unavailable }
+    : { config: result.config }
 }
 
 const AGENT_BACKENDS = ['pi', 'openai', 'hermes'] as const

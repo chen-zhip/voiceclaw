@@ -157,11 +157,118 @@ describe('buildRelayEnv', () => {
     expect(env.GEMINI_API_KEY).toBe('keychain-wins')
   })
 
+  it('hands the bundled Relay the configured local bindings and their declared configuration', async () => {
+    const { buildRelayEnv } = await import('./relay-server')
+
+    const env = buildRelayEnv({
+      localBindings: [
+        {
+          bindingId: 'binding-1',
+          providerId: 'codex',
+          workspaceBindingId: 'workspace-1',
+          workspacePath: 'C:\\workspaces\\first',
+        },
+        { bindingId: 'binding-2', providerId: 'codex', workspaceBindingId: 'workspace-2' },
+      ],
+    })
+
+    const carried = JSON.parse(env.VOICECLAW_LOCAL_BINDINGS ?? '[]')
+    expect(carried).toEqual([
+      {
+        bindingId: 'binding-1',
+        providerId: 'codex',
+        workspaceBindingId: 'workspace-1',
+        workspacePath: 'C:\\workspaces\\first',
+      },
+      {
+        bindingId: 'binding-2',
+        providerId: 'codex',
+        workspaceBindingId: 'workspace-2',
+        workspacePath: undefined,
+      },
+    ])
+    expect(Object.keys(carried[0])).toEqual([
+      'bindingId',
+      'providerId',
+      'workspaceBindingId',
+      'workspacePath',
+    ])
+    expect(buildRelayEnv().VOICECLAW_LOCAL_BINDINGS).toBeUndefined()
+  })
+
+  it('forwards Harness and provider settings', async () => {
+    process.env.VOICECLAW_STT_PROVIDER = 'gpt-sovits-stt'
+    process.env.VOICECLAW_TTS_PROVIDER = 'gpt-sovits-tts'
+    process.env.VOICECLAW_HARNESS_ID = 'codex'
+    process.env.DEEPGRAM_API_KEY = 'deepgram-key'
+    process.env.ELEVENLABS_API_KEY = 'elevenlabs-key'
+
+    const { buildRelayEnv } = await import('./relay-server')
+    const env = buildRelayEnv()
+
+    expect(env).toMatchObject({
+      VOICECLAW_STT_PROVIDER: 'gpt-sovits-stt',
+      VOICECLAW_TTS_PROVIDER: 'gpt-sovits-tts',
+      VOICECLAW_HARNESS_ID: 'codex',
+      DEEPGRAM_API_KEY: 'deepgram-key',
+      ELEVENLABS_API_KEY: 'elevenlabs-key',
+    })
+  })
+
+  it('forwards STT/TTS debug activation to the bundled Relay', async () => {
+    process.env.VOICECLAW_STT_TTS_DEBUG = 'true'
+
+    const { buildRelayEnv } = await import('./relay-server')
+
+    expect(buildRelayEnv().VOICECLAW_STT_TTS_DEBUG).toBe('true')
+  })
+
+  it('declares cloud provider defaults when the operator declares none', async () => {
+    delete process.env.VOICECLAW_STT_PROVIDER
+    delete process.env.VOICECLAW_TTS_PROVIDER
+    delete process.env.VOICECLAW_HARNESS_ID
+
+    const { buildRelayEnv } = await import('./relay-server')
+    const env = buildRelayEnv()
+
+    expect(env.VOICECLAW_STT_PROVIDER).toBe('deepgram')
+    expect(env.VOICECLAW_TTS_PROVIDER).toBe('elevenlabs')
+    expect(env.VOICECLAW_HARNESS_ID).toBeUndefined()
+  })
+
   it('injects BRAIN_GATEWAY_AUTH_TOKEN from the openclaw config when env is empty', async () => {
     tokenRef.value = 'baked-token'
     const { buildRelayEnv } = await import('./relay-server')
     const env = buildRelayEnv()
     expect(env.BRAIN_GATEWAY_AUTH_TOKEN).toBe('baked-token')
+  })
+
+  it('forwards local voice and harness settings', async () => {
+    process.env.GPT_SOVITS_SERVICE_URL = 'http://127.0.0.1:9880'
+    process.env.GPT_SOVITS_REFERENCE_AUDIO = 'C:\\refs\\voice.wav'
+    process.env.GPT_SOVITS_ROOT = 'C:\\gpt-sovits'
+    process.env.GPT_SOVITS_PYTHON = 'C:\\gpt-sovits\\venv\\python.exe'
+    process.env.VOICECLAW_SHIPPED_PLUGIN_ROOTS = 'C:\\plugins'
+    process.env.VOICECLAW_HARNESS_PACKAGE_ID = 'voiceclaw-provider-codex'
+    process.env.VOICECLAW_HARNESS_CONTRIBUTION_ID = 'codex-provider'
+    process.env.VOICECLAW_VERSION = '0.1.0'
+    providerKeysRef.fn = (provider) => (provider === 'gemini' ? 'keychain-gemini' : null)
+
+    const { buildRelayEnv } = await import('./relay-server')
+    const env = buildRelayEnv()
+
+    expect(env).toMatchObject({
+      GPT_SOVITS_SERVICE_URL: 'http://127.0.0.1:9880',
+      GPT_SOVITS_REFERENCE_AUDIO: 'C:\\refs\\voice.wav',
+      GPT_SOVITS_ROOT: 'C:\\gpt-sovits',
+      GPT_SOVITS_PYTHON: 'C:\\gpt-sovits\\venv\\python.exe',
+      VOICECLAW_SHIPPED_PLUGIN_ROOTS: 'C:\\plugins',
+      VOICECLAW_HARNESS_PACKAGE_ID: 'voiceclaw-provider-codex',
+      VOICECLAW_HARNESS_CONTRIBUTION_ID: 'codex-provider',
+      VOICECLAW_VERSION: '0.1.0',
+    })
+    expect(env.GEMINI_API_KEY).toBe('keychain-gemini')
+    expect(env.OPENAI_API_KEY).toBeUndefined()
   })
 
   it('does not override an explicit BRAIN_GATEWAY_AUTH_TOKEN env value', async () => {
@@ -340,6 +447,27 @@ describe('resolveRelaySpawn', () => {
   })
 })
 
+describe('getBundledHostUrl', () => {
+  afterEach(() => {
+    allocatedPortsRef.relay = undefined
+    vi.resetModules()
+  })
+
+  it('connects the bundled Host over loopback, not the pairing address', async () => {
+    allocatedPortsRef.relay = 9123
+    const { getBundledHostUrl } = await import('./relay-server')
+
+    expect(getBundledHostUrl()).toBe('ws://127.0.0.1:9123/host/ws')
+  })
+
+  it('reports no Host URL before the Relay port is allocated', async () => {
+    allocatedPortsRef.relay = undefined
+    const { getBundledHostUrl } = await import('./relay-server')
+
+    expect(getBundledHostUrl()).toBeNull()
+  })
+})
+
 describe('getTailnetUrl', () => {
   beforeEach(() => {
     allocatedPortsRef.openclawGateway = undefined
@@ -375,6 +503,7 @@ describe('getTailnetUrl', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.resetModules()
   })
 
@@ -457,6 +586,11 @@ describe('startBundledRelayServer (external relay detection)', () => {
     vi.mocked(ports.allocatePort).mockResolvedValue(43123)
     const sm = await import('./service-manager')
     const startSpy = vi.spyOn(sm.serviceManager, 'start').mockResolvedValue()
+    vi.spyOn(sm.serviceManager, 'getStatus').mockReturnValue({
+      state: 'running',
+      port: 43123,
+      startedAt: Date.now(),
+    })
     const secrets = ['startup-secret-1', 'startup-secret-2']
     const stackIds = ['stack-1', 'stack-2']
     const { expireBundledHostLaunch, getBundledHostRuntimeEnvironment, startBundledRelayServer } =
@@ -525,5 +659,25 @@ describe('startBundledRelayServer (external relay detection)', () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
+  })
+})
+
+describe('relay startup failure reporting', () => {
+  it('names the failed Relay instead of leaving an unrelated connect error', async () => {
+    const { describeRelayStartFailure } = await import('./relay-server')
+
+    expect(describeRelayStartFailure({ state: 'running', port: 8080, startedAt: 0 })).toBeNull()
+    expect(
+      describeRelayStartFailure({ state: 'crashed', lastExitCode: 1, startedAt: 0 })
+    ).toContain('code=1')
+    expect(
+      describeRelayStartFailure({
+        state: 'failed',
+        reason: 'health check did not pass within 10000ms',
+        startedAt: 0,
+      })
+    ).toContain('health check did not pass')
+    expect(describeRelayStartFailure({ state: 'idle' })).toContain('state=idle')
+    expect(describeRelayStartFailure({ state: 'stopped' })).toContain('state=stopped')
   })
 })

@@ -13,6 +13,7 @@ import { createAdapter } from './adapters/index.js'
 import { log, warn, error as logError } from './log.js'
 import { gracefulShutdown } from './shutdown.js'
 import { createRelayServer } from './server-factory.js'
+import type { HostTransport } from './plugin-kernel/phase-zero-kernel.js'
 import { getBridgeConfig, getDiscoveryFilePath } from './device-tokens.js'
 import { ControlStateStore } from './plugin-kernel/control-state-store.js'
 import { RemoteHostEnrollmentService } from './desktop-host/host-enrollment.js'
@@ -27,6 +28,7 @@ import { ActiveHostAssignmentService } from './desktop-host/active-assignment.js
 import { CapabilityGrantEvaluator } from './plugin-kernel/capability-grants.js'
 import { HostContributionRegistry } from './desktop-host/provider-registration.js'
 import { bootstrapProductionHostKernel } from './desktop-host/production-kernel.js'
+import { seedLocalProfile } from './desktop-host/local-profile.js'
 import { getThinkingStorage } from './thinking/storage.js'
 import { ConversationRouting } from './harness-execution/conversation-routing.js'
 import { ConversationThreadMappings } from './harness-execution/thread-mapping.js'
@@ -49,6 +51,7 @@ const controlState = await ControlStateStore.open(controlStatePath, {
   requester: { kind: 'relay-authority', id: 'desktop-host-gateway' },
   allowedDirectory: dirname(controlStatePath),
 })
+await seedLocalProfile({ store: controlState, environment: process.env })
 const enrollment = new RemoteHostEnrollmentService(controlState, {
   authorizeOwner: (principal) => principal.kind === 'user',
 })
@@ -57,7 +60,22 @@ const hostGateway = new DesktopHostConnectionGateway(controlState, { localBootst
 const assignments = new ActiveHostAssignmentService(controlState, hostGateway)
 const capabilityGrants = new CapabilityGrantEvaluator(controlState)
 const hostContributions = new HostContributionRegistry(hostGateway)
-const hostKernel = await bootstrapProductionHostKernel(process.env, controlStatePath, controlState)
+// Late-bound: the Kernel needs the Host gateway, and the gateway needs the
+// Kernel's effective graph. Invocations only happen after both exist.
+const hostGatewayTransport: { current?: HostTransport } = {}
+const hostKernel = await bootstrapProductionHostKernel(
+  process.env,
+  controlStatePath,
+  controlState,
+  {
+    invoke: async (input) => {
+      if (!hostGatewayTransport.current) {
+        throw new Error('No Desktop Host transport is connected for this Harness binding')
+      }
+      return hostGatewayTransport.current.invoke(input)
+    },
+  }
+)
 const harnessRouting = new ConversationRouting()
 const harnessMappings = new ConversationThreadMappings(controlState)
 const harnessPackageId = process.env.VOICECLAW_HARNESS_PACKAGE_ID?.trim()
@@ -94,29 +112,30 @@ const app = createRelayHttpApplication({
 
 const { server, tls: tlsActive } = createRelayServer(app)
 
-const { clientWebSocketServer: wss, hostWebSocketServer: hostWss } = mountRelayWebSocketGateways(
-  server,
-  {
-    hostGateway,
-    assignments,
-    contributions: hostContributions,
-    kernel: hostKernel,
-    authorizeInvocation: ({ hostId, envelope }) =>
-      hostGateway.isConnected(hostId) &&
-      capabilityGrants.authorize({
-        principalId: envelope.principal.id,
-        contractId: envelope.contract.id,
-        operation: envelope.operation,
-        scope: envelope.scope,
-        ...(envelope.scope.kind === 'workspace' && envelope.scope.id
-          ? { workspaceBindingId: envelope.scope.id }
-          : {}),
-      }).authorized,
-    onClientConnection: (ws) => {
-      new RelaySession(ws, createAdapter, getThinkingStorage(), harnessRoutingPort)
-    },
-  }
-)
+const {
+  clientWebSocketServer: wss,
+  hostWebSocketServer: hostWss,
+  hostControl,
+} = mountRelayWebSocketGateways(server, {
+  hostGateway,
+  assignments,
+  contributions: hostContributions,
+  kernel: hostKernel,
+  authorizeInvocation: ({ hostId, envelope }) =>
+    hostGateway.isConnected(hostId) &&
+    capabilityGrants.authorize({
+      principalId: envelope.principal.id,
+      contractId: envelope.contract.id,
+      operation: envelope.operation,
+      scope: envelope.scope,
+      ...(envelope.scope.kind === 'workspace' && envelope.scope.id
+        ? { workspaceBindingId: envelope.scope.id }
+        : {}),
+    }).authorized,
+  onClientConnection: (ws) => {
+    new RelaySession(ws, createAdapter, getThinkingStorage(), harnessRoutingPort)
+  },
+})
 
 // Guards SIGTERM/SIGINT idempotency at the OS-signal layer; the drain-loop
 // flag in shutdown.ts guards gracefulShutdown itself.
@@ -237,3 +256,4 @@ function getLanIP(): string | null {
   }
   return null
 }
+hostGatewayTransport.current = hostControl as unknown as HostTransport

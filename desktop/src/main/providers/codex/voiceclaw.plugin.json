@@ -1,0 +1,61 @@
+{
+  "manifestVersion": 0,
+  "id": "voiceclaw-provider-codex",
+  "version": "1.0.0",
+  "voiceclawVersionRange": ">=0.1.0 <0.2.0",
+  "feature": {
+    "id": "codex",
+    "displayName": "Codex"
+  },
+  "contributions": [
+    {
+      "id": "codex-provider",
+      "type": "provider-integration",
+      "runtime": "desktop",
+      "entry": "codex-provider.ts",
+      "provides": [
+        { "id": "harness.execution", "version": "1.0.0" },
+        { "id": "harness.capability-profile", "version": "1.0.0" }
+      ],
+      "requires": [],
+      "configSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["workspacePath"],
+        "properties": {
+          "executablePath": { "type": "string" },
+          "workspacePath": { "type": "string" },
+          "model": { "type": "string" },
+          "approvalPolicy": { "type": "string", "enum": ["ask", "never"] },
+          "accountRef": { "type": "string" }
+        }
+      },
+      "requestedPermissions": [
+        { "id": "process.spawn", "scope": "workspace" },
+        { "id": "workspace.read-write", "scope": "workspace" },
+        { "id": "secret.reference", "scope": "workspace" }
+      ]
+    },
+    {
+      "id": "codex-settings",
+      "type": "client-ui",
+      "runtime": "desktop",
+      "entry": "codex-settings-metadata.ts",
+      "provides": [{ "id": "provider.settings", "version": "1.0.0" }],
+      "requires": [{ "id": "harness.execution", "range": "^1.0.0" }],
+      "configSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "requestedPermissions": []
+    }
+  ],
+  "lifecycle": {
+    "activation": "startup",
+    "disable": "restart-required",
+    "update": "restart-required",
+    "uninstall": "unsupported",
+    "dataDisposition": "retain"
+  }
+}

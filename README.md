@@ -3,184 +3,179 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Platform: macOS](https://img.shields.io/badge/Platform-macOS-000000?logo=apple&logoColor=white)]()
-[![Platform: iOS](https://img.shields.io/badge/Platform-iOS-000000?logo=apple&logoColor=white)]()
-[![Gemini Live](https://img.shields.io/badge/Gemini-Live_API-4285F4?logo=google&logoColor=white)]()
-[![Grok Voice](https://img.shields.io/badge/Grok-Voice_API-000000)]()
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](relay-server/Dockerfile)
 
-Open-source, Harness-neutral framework for composable Agent interaction and capabilities across devices.
+Open-source, Harness-neutral framework for composable Agent voice interaction across devices.
 
-VoiceClaw's long-term architecture combines Relay, Desktop Host, Clients, and multiple Harnesses through a trusted Kernel. Voice interaction and official Feature Plugins provide the default experience, while developers can extend or replace data, model, tool, automation, and UI capabilities. Codex, Claude Code, DeepSeek Harness, and other Harnesses remain peer integrations; VoiceClaw is not a downstream distribution of any one Harness.
-
-The current implementation is still primarily a **thin voice layer on top of an existing AI agent**. The Feature Plugin Kernel, official Archive/Memory plugins, and production Harness integrations are planned architecture and must not be read as already shipped behavior.
+VoiceClaw combines a Relay server, a Desktop Host, and Clients (desktop/mobile) through a trusted Plugin Kernel. Realtime voice models handle conversation; coding-agent Harnesses (Codex, Claude Code, …) do the real work. Harnesses stay peer integrations delivered as plugin packages — VoiceClaw is not a downstream distribution of any one agent.
 
 ## Demo
 
-Watch VoiceClaw in action as a thinking partner for real-time problem solving:
+Watch VoiceClaw as a thinking partner for real-time problem solving:
 
 [![VoiceClaw Demo](assets/videos/demo-thumbnail.jpg)](https://youtu.be/iAS7vj2vRaA?si=oelgIdETS8iWTavV)
 
-**The magic of voice agents:** Talk through ideas with your AI agent while you work. Real collaboration, real thinking.
+## Conversation pipelines
+
+A session selects one of three explicit pipelines (`session.config`):
+
+| Pipeline            | `mode` / `voiceMode`       | What runs the turn                                                                                                                    | Status                     |
+| ------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| **S2S Direct**      | `s2s` / `direct` (default) | A realtime voice model (Gemini Live, OpenAI Realtime, Grok Voice) with direct Relay tools (`read`/`write`/`edit`/`bash`/`web_search`) | Stable                     |
+| **S2S Operator**    | `s2s` / `operator`         | The realtime model delegates tasks to a Brain Agent (any OpenAI-compatible endpoint, e.g. OpenClaw) via `ask_brain`                   | Stable                     |
+| **STT/TTS Harness** | `stt-tts`                  | Finalized speech is recognized (STT), dispatched to a Desktop-hosted Harness Provider, and the streamed reply is synthesized (TTS)    | Runnable prototype (Codex) |
+
+The STT/TTS Harness path is the current focus: it gives the voice loop a real coding agent with native tools, threads, and workspace ownership instead of a chat-completions facade.
+
+## Architecture
+
+```mermaid
+flowchart LR
+ subgraph Clients["📲 Clients"]
+    direction TB
+        Mobile["📱 Mobile App"]
+        Desktop["🖥️ Desktop App"]
+  end
+    Mobile -- audio --> Relay["🔗 Relay Server"]
+    Desktop -- audio + text --> Relay
+    Relay <-- S2S audio --> Provider["📢 Realtime Provider<br>(Gemini / OpenAI / xAI)"]
+    Provider -- ask_brain --> Relay
+    Relay <-- SSE --> Brain["🧠 Brain Agent<br>(OpenClaw or any<br>OpenAI-compatible endpoint)"]
+    Relay -- STT text --> Host["🖥️ Desktop Host<br>(plugin loader + supervision)"]
+    Host <-- JSON-RPC stdio --> Harness["⚙️ Harness Provider<br>(Codex app-server)"]
+    Relay -- TTS audio --> Desktop
+```
+
+- **Relay** (`relay-server/`) — independently deployable Node.js/TypeScript service owning authentication, sessions, pipeline routing, the turn queue, STT/TTS orchestration, and Kernel control state. Never branches on a provider name.
+- **Desktop** (`desktop/`) — Electron client plus the **Desktop Host**: it discovers `voiceclaw.plugin.json` packages, loads `provider-integration` Contributions, supervises local Harness processes, and can bundle-run the Relay for a one-machine stack.
+- **Plugin Kernel** (Phase 0, spanning Relay and Desktop) — validates plugin manifests, coordinates Contributions, and enforces capability grants, isolation, and generation fencing through the versioned `harness.execution@1` contract (`packages/contracts/`).
+- **Mobile** (`mobile/`) — React Native / Expo iOS client paired to a Relay.
+- **Brain Agent** — S2S Operator's delegate; any OpenAI-compatible chat-completions endpoint works (a vendored [OpenClaw](https://github.com/yagudaev/openclaw) can be bundled).
+
+### Harness Providers
+
+| Provider                             | Form                                                                                                                                                                                                                                                   | Status                                                                                                                                                      |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `codex`                              | First-party plugin package (`desktop/src/main/providers/codex/`) speaking Codex app-server JSON-RPC over stdio. Verified against `codex-cli 0.153.4` with a pinned, fingerprinted schema artifact; other versions get a persistent unverified warning. | Prototype accepted; real app-server and voice-loop tests pass; physical microphone, audible TTS, cancellation, and no-replay disconnect acceptance verified |
+| `claude-code`                        | HTTP gateway scaffold (legacy `HarnessAdapter` boundary)                                                                                                                                                                                               | Test scaffold only                                                                                                                                          |
+| `cherry-studio`, `openai-compatible` | Reserved stable IDs                                                                                                                                                                                                                                    | Planned (`complete-harness-provider-integrations`)                                                                                                          |
+
+### Voice providers (STT/TTS pipeline)
+
+Each boundary is selected independently — a local provider can pair with a cloud one. No provider ever silently falls back to another.
+
+| Boundary | IDs                            | Notes                                                                                                     |
+| -------- | ------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| STT      | `deepgram`, `gpt-sovits-stt`   | GPT-SoVITS STT runs an operator-supplied local offline ASR (FunASR) per utterance; no partial transcripts |
+| TTS      | `elevenlabs`, `gpt-sovits-tts` | GPT-SoVITS TTS calls a local `api_v2.py` HTTP service with reference audio                                |
+
+VoiceClaw never installs or supervises GPT-SoVITS; the operator supplies the checkout and points to it via `GPT_SOVITS_*` environment variables (see [relay-server/README.md](relay-server/README.md)).
 
 ## Quick Start
 
 ### Prerequisites
 
-- Node.js 20+
-- yarn
-
-### 1. Clone the repo
+- Node.js 20+ (repo CI uses 22) and Yarn (`corepack enable`)
+- macOS for packaged desktop builds and iOS; the dev stack also runs on Windows
 
 ```bash
-git clone https://github.com/yagudaev/voiceclaw.git
+git clone https://github.com/chen-zhip/voiceclaw.git
 cd voiceclaw
 yarn install
 ```
 
-### 2. Start the relay server
+### One-click local stack (Desktop + bundled Relay + Host)
 
 ```bash
-cd relay-server
-cp .env.example .env
-# Edit .env and add your API keys (see Configuration below)
+yarn dev:local
+```
+
+This starts the Desktop app, which spawns and owns the bundled Relay and the Desktop Host, then health-checks `http://127.0.0.1:8080/health` and prints the WebSocket and browser test-page URLs. Realtime provider keys (Gemini / OpenAI / xAI) are entered once in the app's Settings UI, not read from the shell.
+
+### Individual workspaces
+
+```bash
+# Standalone relay (reads relay-server/.env — copy .env.example first)
+yarn dev:server
+
+# Desktop app only
+yarn dev:desktop
+
+# Mobile app (Expo)
+yarn dev:mobile
+
+# Relay + desktop + website + tracing together
 yarn dev
 ```
 
-The server starts on `http://localhost:8080` with a test page at `/test`.
+The standalone relay listens on `http://localhost:8080` with a browser test client at `/test`.
 
-### 3. Start the desktop app
+### Trying the STT/TTS Harness path (Codex)
 
-```bash
-cd desktop
-yarn dev
-```
+1. Install and authenticate the Codex CLI (`codex-cli 0.153.4` is the verified profile).
+2. Configure a Native Provider Configuration (workspace path, executable) for the Desktop Host — currently saved via `electronAPI.desktopHost.saveProviderConfiguration` (settings UI is in progress).
+3. In Settings, choose voice mode **stt-tts-harness** and fill the Harness provider/workspace/binding IDs plus STT/TTS provider IDs.
+4. A bundled stack can also declare defaults through the environment: `VOICECLAW_STT_PROVIDER`, `VOICECLAW_TTS_PROVIDER`, `VOICECLAW_HARNESS_ID` (client values always win; local `gpt-sovits-*` providers are never chosen implicitly).
 
-### 4. Start the mobile app
-
-```bash
-cd mobile
-yarn dev
-```
-
-Or use the root workspace scripts:
-
-```bash
-yarn dev:server     # relay server only
-yarn dev:desktop    # desktop app only
-yarn dev:mobile     # mobile app only
-yarn dev            # mobile + web + server together
-```
-
-## How it works: the `ask_brain` pattern
-
-Realtime voice models (Gemini Live, Grok Voice, OpenAI Realtime) are great at natural conversation but can't use tools, access memory, or call external APIs on their own. VoiceClaw bridges this gap with a simple escalation pattern:
-
-1. You speak to a **realtime voice model** that handles conversation naturally
-2. When the model needs capabilities it doesn't have, it calls the `ask_brain` tool
-3. The relay server routes `ask_brain` to **your existing agent** -- any OpenAI-compatible chat completions endpoint
-4. Your agent does the heavy lifting (web search, memory lookup, tool execution) and streams results back
-5. The voice model incorporates the answer and keeps talking
-
-**Bring your own agent.** VoiceClaw doesn't ship a brain -- it connects to yours. Point it at [OpenClaw](https://github.com/yagudaev/openclaw), [Hermes](https://nousresearch.com/hermes), any MCP-based agent, or your own custom endpoint. If it speaks the OpenAI chat completions protocol, it works.
-
-## Architecture
-
-The confirmed target uses VoiceClaw Plugin Packages. A Feature Plugin is the user-managed capability, runtime-specific Contributions implement it, and versioned Capability Contracts decouple providers from consumers. Identity, authorization, isolation, data ownership, deletion, audit, migration coordination, and generation fencing remain trusted Kernel responsibilities.
-
-```mermaid
----
-config:
-  layout: dagre
----
-flowchart LR
- subgraph Clients["📲 Clients"]
-    direction TB
-        Mobile["📱 Mobile App<br>"]
-        Desktop["🖥️ Desktop App<br>"]
-  end
-    Mobile -- "1. audio" --> Relay["🔗 Relay Server<br>"]
-    Desktop -- "1. audio + video" --> Relay
-    Relay <-- "2. forward<br>audio + video" --> Provider["📢 Realtime AI Provider (S2S)"]
-    Relay <-- "4. Asking brain...</br>POST /v1/chat/completions</br>(SSE stream)" --> Brain["🧠 Brain AI <br>(LLM Agent: OpenClaw, Hermes, Pi)<br>"]
-    Provider -- "3. tool call: ask_brain" --> Relay
-
-     Mobile:::clientStyle
-     Desktop:::clientStyle
-     Relay:::relayStyle
-     Provider:::providerStyle
-     Brain:::brainStyle
-    classDef clientStyle fill:#1c1636,stroke:#6c63ff,color:#f5f3ff
-    classDef relayStyle fill:#4a3fd9,stroke:#c4c1ff,color:#f5f3ff
-    classDef providerStyle fill:#14102a,stroke:#8b84ff,color:#c4c1ff
-    classDef brainStyle fill:#2a1f5c,stroke:#c4c1ff,color:#f5f3ff
-```
-
-<details>
-<summary>View as ASCII</summary>
-
-```text
-+------------------+        WebSocket         +----------------+        Streaming API       +------------------+
-|                  | -----------------------> |                | -----------------------> |                  |
-|   Mobile App     |    audio + events        |  Relay Server  |    audio + events        |  Realtime Voice  |
-|   (Expo / iOS)   | <----------------------- |  (Node.js)     | <----------------------- |  (Gemini Live    |
-|                  |                          |                |                          |   or OpenAI)     |
-+------------------+                          |                |                          +------------------+
-                                              |                |
-+------------------+                          |  ask_brain     |        HTTP / SSE         +------------------+
-|                  | -----------------------> |  --------------|-------------------------> |                  |
-|   Desktop App    |    audio + events        |                |    OpenAI-compatible      |   Brain Agent    |
-|   (Electron)     | <----------------------- |                |    chat completions       |   (any agent)    |
-|                  |                          +----------------+                           +------------------+
-+------------------+                                                                       OpenClaw, Hermes,
-                                                                                           or your own agent
-```
-
-</details>
-
-**Mobile app** -- React Native / Expo iOS app with voice capture and playback.
-**Desktop app** -- Electron + React + Tailwind macOS app with screen sharing support.
-**Relay server** -- TypeScript / Node.js WebSocket server that brokers sessions between clients and AI providers.
-**Brain agent** -- Any OpenAI-compatible agent endpoint. The relay calls it via `ask_brain` when the voice model needs tools, memory, or external data. Swap in any agent you want.
+Set `VOICECLAW_STT_TTS_DEBUG=true` to get stage-by-stage JSON diagnostics for the pipeline ([docs/stt-tts-debug-checkpoints.md](docs/stt-tts-debug-checkpoints.md)). `VOICECLAW_CODEX_SIMULATED=true` swaps the real app-server for a deterministic simulation boundary when debugging without credentials.
 
 ## Configuration
 
-The relay server reads these environment variables from `relay-server/.env`:
+The standalone Relay reads `relay-server/.env` (see [.env.example](relay-server/.env.example) for the full annotated list):
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GEMINI_API_KEY` | Yes (for Gemini provider) | Google Gemini API key for Live API |
-| `XAI_API_KEY` | Yes (for xAI provider) | xAI API key for Grok Voice API |
-| `OPENAI_API_KEY` | Yes (for OpenAI provider) | OpenAI API key for Realtime API |
-| `RELAY_API_KEY` | Recommended | API key clients must send to connect. Generate with `openssl rand -hex 24` |
-| `BRAIN_GATEWAY_AUTH_TOKEN` | Optional | Auth token for your brain agent endpoint |
-| `BRAIN_GATEWAY_URL` | Optional | Brain agent URL -- any OpenAI-compatible endpoint (default: `http://localhost:18789`) |
-| `PORT` | Optional | Server port (default: `8080`) |
-| `LANGFUSE_PUBLIC_KEY` | Optional | Langfuse tracing public key |
-| `LANGFUSE_SECRET_KEY` | Optional | Langfuse tracing secret key |
-| `LANGFUSE_BASE_URL` | Optional | Langfuse endpoint (default: `https://cloud.langfuse.com`) |
+| Variable                                                                                              | Purpose                                                        |
+| ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `GEMINI_API_KEY` / `OPENAI_API_KEY` / `XAI_API_KEY`                                                   | Realtime S2S provider keys (at least one)                      |
+| `RELAY_API_KEY`                                                                                       | Client auth key (required in production)                       |
+| `BRAIN_GATEWAY_URL`, `BRAIN_GATEWAY_AUTH_TOKEN`                                                       | Brain Agent endpoint for S2S Operator                          |
+| `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`                                                              | Cloud STT/TTS keys                                             |
+| `GPT_SOVITS_*`                                                                                        | Local GPT-SoVITS service URL, reference audio, ASR root/python |
+| `VOICECLAW_STT_PROVIDER`, `VOICECLAW_TTS_PROVIDER`, `VOICECLAW_HARNESS_ID`                            | STT/TTS pipeline component defaults                            |
+| `VOICECLAW_SHIPPED_PLUGIN_ROOTS`, `VOICECLAW_HARNESS_PACKAGE_ID`, `VOICECLAW_HARNESS_CONTRIBUTION_ID` | Harness plugin package discovery and selection                 |
+| `LANGFUSE_*`, `TRACING_UI_COLLECTOR_URL`                                                              | Optional per-turn tracing                                      |
+| `TAVILY_API_KEY`                                                                                      | Optional `web_search` tool                                     |
 
-You need at least one provider key (`GEMINI_API_KEY`, `XAI_API_KEY`, or `OPENAI_API_KEY`) for the relay to be useful.
-
-## Project Structure
+## Project structure
 
 ```
 voiceclaw/
-  mobile/           React Native (Expo) iOS app
-  desktop/          Electron + React + Tailwind macOS app
-  relay-server/     TypeScript WebSocket relay server
-  website/          Next.js marketing site
-  agent/            Agent plugins and configuration
-  package.json      Yarn workspaces root
+  relay-server/        WebSocket relay: sessions, pipelines, STT/TTS, plugin kernel, host gateway
+  desktop/             Electron client + Desktop Host + first-party provider packages (codex)
+  mobile/              React Native (Expo) iOS client
+  packages/contracts/  @voiceclaw/contracts — manifest v0, kernel envelope, harness.execution@1
+  website/             Next.js site (distribution + optional accounts)
+  docs/                Astro/Starlight docs site, ADRs, architecture boundary guide
+  tracing-collector/   Local OTLP receiver → SQLite
+  tracing-ui/          Local trace explorer (Next.js, port 4319)
+  agent/               Brain-agent plugins/config (OpenClaw, Hermes)
+  openspec/            Spec-driven change workflow: specs, active changes, archive
+  vendor/openclaw      Git submodule — bundled Brain Agent
 ```
+
+## Development
+
+- **Spec-driven workflow** — formal changes go through [OpenSpec](openspec/config.yaml): proposal → specs → design → tasks, TDD per task, strict validation before archive. Active and archived changes live under `openspec/changes/`.
+- **Domain language** — terminology is governed by [CONTEXT-MAP.md](CONTEXT-MAP.md), per-workspace `CONTEXT.md` files, and ADRs under `docs/adr/`. The normative responsibility boundary is [docs/architecture/voiceclaw-harness-boundary.md](docs/architecture/voiceclaw-harness-boundary.md).
+- **Checks** — `yarn typecheck:all`, `yarn workspace relay-server test`, `yarn workspace voiceclaw-desktop test`. Opt-in real-system tests (Codex app-server, GPT-SoVITS) skip themselves unless their runtime is present.
+- **Conventions** — TypeScript, no semicolons, Conventional-Commit PR titles (squash-merged, release-please). See the [contributing docs](https://docs.getvoiceclaw.com/contributing/).
+
+## Status
+
+Prototype critical path (each stage archived in `openspec/changes/archive/` when done):
+
+1. ✅ Plugin Kernel Phase 0 (`packages/contracts`, manifest validation, grants, fencing)
+2. ✅ Desktop Harness Host contract (host enrollment, native provider configuration, readiness)
+3. ✅ Harness Execution Routing (turn/attempt/thread mapping, streaming, cancel, outcome-unknown)
+4. 🔄 Codex provider prototype — implementation and opt-in real app-server e2e complete; the physical microphone → Codex → TTS acceptance journey is the remaining gate
+5. 🔄 Local GPT-SoVITS voice providers — implemented; real synthesis/recognition and audible Desktop playback verified
+
+Archive/Memory feature plugins, multi-provider convergence (Claude Code, OpenAI-compatible, Cherry Studio), history import, and native TUI handoff are deferred follow-up changes. Without Archive, conversations live only in the current Relay session.
 
 ## Contributing
 
-1. Fork the repo and create a feature branch
-2. Make your changes
-3. Open a pull request against `main`
-
-Please keep PRs focused -- one feature or fix per PR.
+1. Fork the repo and create a feature branch from `main`
+2. Make your changes (one focused feature or fix per PR)
+3. Open a pull request against `main` with a Conventional-Commit title
 
 ## License
 

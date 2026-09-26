@@ -1,5 +1,6 @@
 import type { HarnessAdapter } from '../harness-adapter/interface.js'
 import { createHarnessAdapter, listHarnessAdapters } from '../harness-adapter/registry.js'
+import { createHostRoutedHarnessAdapter } from '../harness-adapter/host-routed-adapter.js'
 import { HarnessHTTPClient } from '../harness-adapter/http-client.js'
 import type { STTProvider } from '../stt/interface.js'
 import { createSTTProvider, SUPPORTED_STT_PROVIDERS } from '../stt/index.js'
@@ -20,6 +21,7 @@ import { EchoAdapter } from './echo.js'
 import { OpenAIAdapter } from './openai.js'
 import { GeminiAdapter } from './gemini.js'
 import { XAIAdapter } from './xai.js'
+import { createSttTtsDebugRecorder, type SttTtsDebugRecorder } from '../stt-tts-debug.js'
 
 export interface AdapterFactoryDependencies {
   createSTTProvider?: (name?: string) => STTProvider
@@ -30,6 +32,7 @@ export interface AdapterFactoryDependencies {
   attachThinking?: (content: ThinkingContent, turnId?: string) => void
   getThinkingTracePath?: (turnId?: string) => string | undefined
   harnessRouting?: HarnessRoutingPort
+  debugRecorder?: SttTtsDebugRecorder
 }
 
 export function createAdapter(
@@ -37,17 +40,26 @@ export function createAdapter(
   dependencies: AdapterFactoryDependencies = {}
 ): ProviderAdapter {
   if (typeof input !== 'string' && input.mode === 'stt-tts') {
-    const sttProvider = requireComponentId(input.sttProvider, 'sttProvider')
-    const harnessId = requireComponentId(input.harness, 'harness')
-    const ttsProvider = requireComponentId(input.ttsProvider, 'ttsProvider')
+    const sttProvider = resolveComponentId(
+      input.sttProvider,
+      'sttProvider',
+      process.env.VOICECLAW_STT_PROVIDER
+    )
+    const harnessId = resolveComponentId(input.harness, 'harness', process.env.VOICECLAW_HARNESS_ID)
+    const ttsProvider = resolveComponentId(
+      input.ttsProvider,
+      'ttsProvider',
+      process.env.VOICECLAW_TTS_PROVIDER
+    )
     validateComponents(
       sttProvider,
       harnessId,
       ttsProvider,
-      dependencies.createHarnessAdapter !== undefined
+      dependencies.createHarnessAdapter !== undefined,
+      dependencies.harnessRouting !== undefined
     )
     const stt = (dependencies.createSTTProvider ?? createSTTProvider)(sttProvider)
-    const harness = (dependencies.createHarnessAdapter ?? defaultHarnessFactory)(harnessId)
+    const harness = resolveHarnessAdapter(harnessId, dependencies)
     const tts = (dependencies.createTTSProvider ?? createTTSProvider)(ttsProvider)
     const thinkingStorage = getThinkingStorage()
     const outputRouter = new OutputRouter({
@@ -60,7 +72,12 @@ export function createAdapter(
           thinkingStorage.append(entry, dependencies.getThinkingTracePath?.(entry.turnId))),
       attachThinkingContent: dependencies.attachThinking,
     })
-    return new ComposedAdapter(stt, harness, tts, outputRouter, dependencies.harnessRouting)
+    return new ComposedAdapter(stt, harness, tts, outputRouter, dependencies.harnessRouting, {
+      recorder: dependencies.debugRecorder ?? createSttTtsDebugRecorder(),
+      sttProviderId: sttProvider,
+      harnessProviderId: harnessId,
+      ttsProviderId: ttsProvider,
+    })
   }
   const provider = typeof input === 'string' ? input : input.provider
   switch (provider) {
@@ -81,8 +98,28 @@ function defaultHarnessFactory(id: string): HarnessAdapter {
   return createHarnessAdapter(id, new HarnessHTTPClient())
 }
 
-function requireComponentId(value: string | undefined, field: string): string {
-  if (value?.trim()) return value
+// A Host-routed Harness needs no local adapter: the Desktop Host executes its
+// Turns, so construction must succeed even when this build ships no adapter.
+function resolveHarnessAdapter(
+  id: string,
+  dependencies: AdapterFactoryDependencies
+): HarnessAdapter {
+  if (dependencies.createHarnessAdapter) return dependencies.createHarnessAdapter(id)
+  try {
+    return defaultHarnessFactory(id)
+  } catch (error) {
+    if (dependencies.harnessRouting) return createHostRoutedHarnessAdapter(id)
+    throw error
+  }
+}
+
+function resolveComponentId(
+  value: string | undefined,
+  field: string,
+  declared: string | undefined
+): string {
+  const resolved = value?.trim() ? value : declared?.trim() ? declared : undefined
+  if (resolved) return resolved
   throw new Error(`${field} is required when mode is stt-tts`)
 }
 
@@ -90,7 +127,8 @@ function validateComponents(
   sttProvider: string,
   harnessId: string,
   ttsProvider: string,
-  hasInjectedHarness: boolean
+  hasInjectedHarness: boolean,
+  isHostRouted: boolean
 ): void {
   if (!SUPPORTED_STT_PROVIDERS.includes(sttProvider.toLowerCase() as 'deepgram')) {
     throw new Error(
@@ -114,7 +152,7 @@ function validateComponents(
       `Unknown Harness Integration Contract boundary ${harnessId}. Known IDs: ${known}`
     )
   }
-  if (!harness.available && !(hasInjectedHarness && harnessId === 'claude-code')) {
+  if (!harness.available && !(hasInjectedHarness && harnessId === 'claude-code') && !isHostRouted) {
     throw new Error(
       `Harness Integration Contract boundary ${harnessId} is not available. Available: ${available}. Known IDs: ${known}`
     )

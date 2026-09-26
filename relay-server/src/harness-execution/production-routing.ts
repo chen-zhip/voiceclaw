@@ -52,6 +52,7 @@ export function createProductionHarnessRouting(
       text: string
       final: boolean
       binding: HarnessBindingInput
+      onDispatched?: (accepted: AcceptedHarnessAttempt) => void
     }): Promise<HarnessDispatchResult> {
       // The store supplies binding data; live Host readiness is enforced by the
       // Kernel, so the reader reports readiness for a matched assignment.

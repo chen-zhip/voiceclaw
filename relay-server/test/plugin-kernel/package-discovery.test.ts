@@ -123,4 +123,36 @@ describe('Kernel package discovery', () => {
       result.rejections.every(({ errors }) => errors[0]?.code === 'duplicate_manifest_id')
     ).toBe(true)
   })
+
+  it('reports an unreadable shipped root instead of passing it off as no package', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'voiceclaw-discovery-shipped-'))
+    const absent = join(base, 'not-created')
+
+    const result = await discovery.discoverPluginPackages({
+      shippedRoots: [absent],
+      developmentAllowlistedRoots: [],
+      voiceclawVersion: '0.1.0',
+    })
+
+    expect(result.packages).toEqual([])
+    expect(result.rejections).toEqual([
+      expect.objectContaining({
+        root: absent,
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'root_unreadable' })]),
+      }),
+    ])
+  })
+
+  it('stays quiet about a development-allowlisted root that does not exist', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'voiceclaw-discovery-optional-'))
+
+    const result = await discovery.discoverPluginPackages({
+      shippedRoots: [],
+      developmentAllowlistedRoots: [join(base, 'absent')],
+      voiceclawVersion: '0.1.0',
+    })
+
+    expect(result.packages).toEqual([])
+    expect(result.rejections).toEqual([])
+  })
 })

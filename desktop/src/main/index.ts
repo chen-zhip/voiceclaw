@@ -41,6 +41,8 @@ import { registerShortcutHandlers, unregisterAllShortcuts } from './shortcuts'
 import { serviceManager } from './services/service-manager'
 import { applyGeminiKeyToOpenClawConfig, startBundledOpenClaw } from './services/openclaw-gateway'
 import { expireBundledHostLaunch, startBundledRelayServer } from './services/relay-server'
+import { DesktopSettingsStorage } from './desktop-host/native-provider-configuration'
+import { listLocalBindingHandoff } from './desktop-host/host-provider-context'
 import { startDeviceTokenBridge, stopDeviceTokenBridge } from './services/device-token-bridge'
 import { ensureDefault as ensureLaunchAtLoginDefault } from './login-items'
 import { initAutoUpdater } from './updater'
@@ -261,7 +263,13 @@ app.whenReady().then(async () => {
       console.warn('[openclaw] failed to start', err)
       captureException(err, { source: 'startBundledOpenClaw' })
     })
-    .then(() => startBundledRelayServer())
+    .then(async () => {
+      const localBindings = await listLocalBindingHandoff(new DesktopSettingsStorage(getDb()))
+      console.log(
+        `[relay] handing ${localBindings.length} configured local binding(s) to the bundled Relay`
+      )
+      await startBundledRelayServer({ localBindings })
+    })
     .then(() => desktopHostRuntime?.start())
     .catch((err) => {
       console.warn('[relay/desktop-host] failed to start', err)

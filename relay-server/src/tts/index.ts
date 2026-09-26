@@ -1,11 +1,14 @@
 import { ElevenLabsTTSProvider } from './elevenlabs.js'
+import { GptSovitsTTSProvider, type GptSovitsTtsDependencies } from './gpt-sovits.js'
 import type { TTSProvider } from './interface.js'
 
 export type { AudioChunk, SynthesizeOptions, TTSConfig, TTSProvider } from './interface.js'
 export { ElevenLabsTTSProvider } from './elevenlabs.js'
+export { GptSovitsTTSProvider } from './gpt-sovits.js'
+export type { GptSovitsSynthesisRequest, GptSovitsTtsDependencies } from './gpt-sovits.js'
 
 export const DEFAULT_TTS_PROVIDER = 'elevenlabs'
-export const SUPPORTED_TTS_PROVIDERS = ['elevenlabs'] as const
+export const SUPPORTED_TTS_PROVIDERS = ['elevenlabs', 'gpt-sovits-tts'] as const
 
 // Cap on sentences batched into one synthesis request. Larger batches give the
 // model cross-sentence prosody context but delay first audio unacceptably.
@@ -17,11 +20,16 @@ export function clampSentenceBatchSize(requested?: number): number {
   return Math.min(MAX_SENTENCE_BATCH_SIZE, Math.max(1, Math.floor(requested)))
 }
 
-export function createTTSProvider(name?: string): TTSProvider {
+export function createTTSProvider(
+  name?: string,
+  dependencies: Partial<GptSovitsTtsDependencies> = {}
+): TTSProvider {
   const provider = (name ?? DEFAULT_TTS_PROVIDER).toLowerCase()
   switch (provider) {
     case 'elevenlabs':
       return new ElevenLabsTTSProvider()
+    case 'gpt-sovits-tts':
+      return new GptSovitsTTSProvider(dependencies)
     default:
       throw Object.assign(
         new Error(

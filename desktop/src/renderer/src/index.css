@@ -4,22 +4,22 @@
 @layer base {
   :root {
     color-scheme: light;
-    --brand-paper: #f1e8da;
-    --brand-paper-strong: #e8ddcd;
-    --brand-panel: #fdf9f1;
+    --brand-paper: #f7f7f5;
+    --brand-paper-strong: #ececea;
+    --brand-panel: #ffffff;
     --brand-panel-strong: #ffffff;
-    --brand-ink: #191511;
-    --brand-muted: #665f58;
+    --brand-ink: #202123;
+    --brand-muted: #66686d;
     --brand-accent: #b4492f;
     --brand-accent-hover: #963a25;
     --brand-accent-wash: rgba(180, 73, 47, 0.14);
     --brand-sage: #697668;
     --brand-sage-wash: rgba(105, 118, 104, 0.15);
-    --brand-line: rgba(25, 21, 17, 0.1);
-    --brand-line-strong: rgba(25, 21, 17, 0.2);
-    --brand-shadow: 0 18px 40px rgba(25, 21, 17, 0.08);
-    --brand-grid-line: rgba(25, 21, 17, 0.055);
-    --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --brand-line: rgba(32, 33, 35, 0.08);
+    --brand-line-strong: rgba(32, 33, 35, 0.14);
+    --brand-shadow: 0 18px 40px rgba(32, 33, 35, 0.08);
+    --font-sans:
+      Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     --font-serif: Fraunces, Georgia, ui-serif, serif;
     --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
     --background: var(--brand-paper);
@@ -36,31 +36,38 @@
     --destructive-foreground: #fafafa;
     --accent: var(--brand-accent-wash);
     --accent-foreground: var(--brand-accent);
+    --shell-workspace: #f7f7f5;
+    --shell-navigation: #ececea;
+    --shell-raised: #ffffff;
+    --shell-selected: #ddddda;
+    --shell-text: #202123;
+    --shell-muted: #66686d;
+    --shell-border: rgba(32, 33, 35, 0.1);
+    --shell-signal: #b4492f;
   }
 
   .dark {
     color-scheme: dark;
-    --brand-paper: #171310;
-    --brand-paper-strong: #211b16;
-    --brand-panel: #211b16;
-    --brand-panel-strong: #2c251f;
-    --brand-ink: #f5eadc;
-    --brand-muted: #b9aa98;
+    --brand-paper: #181818;
+    --brand-paper-strong: #222222;
+    --brand-panel: #2f2f2f;
+    --brand-panel-strong: #383838;
+    --brand-ink: #f3f4f6;
+    --brand-muted: #a8acb4;
     --brand-accent: #d86a4d;
     --brand-accent-hover: #ef8668;
     --brand-accent-wash: rgba(216, 106, 77, 0.18);
     --brand-sage: #9cac99;
     --brand-sage-wash: rgba(156, 172, 153, 0.18);
-    --brand-line: rgba(245, 234, 220, 0.1);
-    --brand-line-strong: rgba(245, 234, 220, 0.2);
+    --brand-line: rgba(243, 244, 246, 0.08);
+    --brand-line-strong: rgba(243, 244, 246, 0.14);
     --brand-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
-    --brand-grid-line: rgba(245, 234, 220, 0.055);
     --background: var(--brand-paper);
     --foreground: var(--brand-ink);
     --card: var(--brand-panel);
     --card-foreground: var(--brand-ink);
     --primary: var(--brand-accent);
-    --primary-foreground: #171310;
+    --primary-foreground: #ffffff;
     --muted: var(--brand-paper-strong);
     --muted-foreground: var(--brand-muted);
     --border: var(--brand-line-strong);
@@ -69,47 +76,18 @@
     --destructive-foreground: #fafafa;
     --accent: var(--brand-accent-wash);
     --accent-foreground: var(--brand-accent);
-  }
-
-  @media (prefers-color-scheme: dark) {
-    :root:not(.light) {
-      color-scheme: dark;
-      --brand-paper: #171310;
-      --brand-paper-strong: #211b16;
-      --brand-panel: #211b16;
-      --brand-panel-strong: #2c251f;
-      --brand-ink: #f5eadc;
-      --brand-muted: #b9aa98;
-      --brand-accent: #d86a4d;
-      --brand-accent-hover: #ef8668;
-      --brand-accent-wash: rgba(216, 106, 77, 0.18);
-      --brand-sage: #9cac99;
-      --brand-sage-wash: rgba(156, 172, 153, 0.18);
-      --brand-line: rgba(245, 234, 220, 0.1);
-      --brand-line-strong: rgba(245, 234, 220, 0.2);
-      --brand-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
-      --brand-grid-line: rgba(245, 234, 220, 0.055);
-      --background: var(--brand-paper);
-      --foreground: var(--brand-ink);
-      --card: var(--brand-panel);
-      --card-foreground: var(--brand-ink);
-      --primary: var(--brand-accent);
-      --primary-foreground: #171310;
-      --muted: var(--brand-paper-strong);
-      --muted-foreground: var(--brand-muted);
-      --border: var(--brand-line-strong);
-      --input: var(--brand-line-strong);
-      --accent: var(--brand-accent-wash);
-      --accent-foreground: var(--brand-accent);
-    }
+    --shell-workspace: #181818;
+    --shell-navigation: #111827;
+    --shell-raised: #2f2f2f;
+    --shell-selected: #343a46;
+    --shell-text: #f3f4f6;
+    --shell-muted: #a8acb4;
+    --shell-border: rgba(243, 244, 246, 0.1);
+    --shell-signal: #d86a4d;
   }
 
   body {
     @apply bg-background text-foreground antialiased;
-    background-image:
-      linear-gradient(var(--brand-grid-line) 1px, transparent 1px),
-      linear-gradient(90deg, var(--brand-grid-line) 1px, transparent 1px);
-    background-size: 28px 28px;
     font-family: var(--font-sans);
     margin: 0;
     overflow: hidden;
@@ -139,9 +117,7 @@
 }
 
 .vc-window-surface {
-  background:
-    radial-gradient(circle at top left, var(--brand-sage-wash), transparent 30%),
-    var(--background);
+  background: var(--background);
 }
 
 .vc-panel-shadow {
@@ -149,8 +125,40 @@
 }
 
 @keyframes thinking-bounce {
-  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-  40% { opacity: 1; transform: scale(1); }
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes vc-signal-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scaleX(0.72);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+.vc-signal-line {
+  transform-origin: center;
+  animation: vc-signal-breathe 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vc-signal-line,
+  .thinking-dot {
+    animation: none;
+  }
 }
 
 .thinking-dot {

@@ -143,6 +143,13 @@ export class HarnessExecutionHostConnection {
         request.workspaceBindingId !== assignment.workspaceBindingId) ||
       (typeof request.generation === 'number' && request.generation !== assignment.generation)
     ) {
+      console.warn(
+        `[relay] stale_generation detail (host-rpc): assignment=${
+          assignment
+            ? `gen${assignment.generation} host=${assignment.hostId} provider=${assignment.providerId} binding=${assignment.bindingId} workspace=${assignment.workspaceBindingId}`
+            : 'missing'
+        } expected=gen${envelope.generation} host=${this.#hostId} provider=${this.#providerId} workspace=${String(envelope.scope.id)} request=${JSON.stringify(request)}`
+      )
       throw new HarnessExecutionConnectionError(
         'stale_generation',
         'Harness operation does not match the current Relay assignment'

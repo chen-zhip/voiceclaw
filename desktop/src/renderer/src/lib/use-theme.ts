@@ -11,6 +11,8 @@ export function useTheme() {
   const applyTheme = useCallback((t: Theme) => {
     const isDark =
       t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+    document.documentElement.dataset.theme = t
+    document.documentElement.dataset.colorScheme = isDark ? 'dark' : 'light'
     document.documentElement.classList.toggle('dark', isDark)
     document.documentElement.classList.toggle('light', !isDark)
   }, [])
@@ -21,7 +23,7 @@ export function useTheme() {
       localStorage.setItem(THEME_KEY, t)
       applyTheme(t)
     },
-    [applyTheme],
+    [applyTheme]
   )
 
   useEffect(() => {

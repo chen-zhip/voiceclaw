@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import { Button } from '../components/ui/Button'
-import { Card } from '../components/ui/Card'
+import {
+  PageContentColumn,
+  PageHeader,
+  PageScrollBody,
+  PageSurface,
+} from '../components/layout/PageLayout'
 import { useConversationContext } from '../lib/conversation-context'
 import {
   deleteAllConversations,
@@ -68,81 +73,100 @@ export function HistoryPage({ isVisible, onNavigateToChat }: HistoryPageProps) {
   )
 
   const handleClearAll = useCallback(async () => {
-    if (!confirm('This will permanently delete all conversations and messages. This cannot be undone.')) return
+    if (
+      !confirm(
+        'This will permanently delete all conversations and messages. This cannot be undone.'
+      )
+    )
+      return
     await deleteAllConversations()
     loadConversations()
   }, [loadConversations])
 
-  if (conversations.length === 0) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
-        <p className="text-lg">No conversations yet</p>
-        <p className="text-sm mt-1">Start a chat to see your history</p>
-      </div>
-    )
-  }
-
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-background/65 backdrop-blur">
-        <div className="text-sm text-muted-foreground">
-          {conversations.length} conversation{conversations.length === 1 ? '' : 's'}
-        </div>
-        <Button variant="ghost" size="sm" onClick={handleClearAll} className="text-destructive hover:text-destructive">
-          <Trash2 size={14} className="mr-1" />
-          Clear All
-        </Button>
-      </div>
-
-      {/* Conversation list */}
-      <div className="flex-1 overflow-y-auto px-4 py-2">
-        {sections.map((section) => (
-          <div key={section.title} className="mb-4">
-            <div className="sticky top-0 bg-background py-2 z-10">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                {section.title}
-              </span>
-            </div>
-            <div className="space-y-1.5">
-              {section.data.map((conv) => (
-                <Card
-                  key={conv.id}
-                  className="p-3 cursor-pointer hover:bg-accent transition-colors group"
-                  onClick={() => handleTap(conv.id)}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground truncate">
-                        {getDisplayTitle(conv)}
-                      </p>
-                      {conv.preview && (
-                        <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">
-                          {conv.preview}
-                        </p>
-                      )}
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        {formatDate(conv.updated_at)}
-                        {conv.message_count > 0 && ` \u00B7 ${conv.message_count} message${conv.message_count === 1 ? '' : 's'}`}
-                      </p>
-                    </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleDelete(conv.id, getDisplayTitle(conv))
-                      }}
-                      className="opacity-0 group-hover:opacity-100 p-1 rounded-md text-muted-foreground hover:text-destructive transition-all"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </Card>
-              ))}
-            </div>
+    <PageSurface accessibleName="Conversation history">
+      <PageHeader>
+        <PageContentColumn className="flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight text-[var(--shell-text)]">
+              History
+            </h1>
+            <p className="mt-1 text-sm text-[var(--shell-muted)]">
+              {conversations.length} conversation{conversations.length === 1 ? '' : 's'}
+            </p>
           </div>
-        ))}
-      </div>
-    </div>
+          {conversations.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleClearAll}
+              className="text-destructive hover:text-destructive">
+              <Trash2 size={14} className="mr-1" />
+              Clear All
+            </Button>
+          )}
+        </PageContentColumn>
+      </PageHeader>
+
+      <PageScrollBody>
+        {conversations.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center text-[var(--shell-muted)]">
+            <p className="text-lg text-[var(--shell-text)]">No conversations yet</p>
+            <p className="mt-1 text-sm">Start a chat to see your history</p>
+          </div>
+        ) : (
+          <div>
+            {sections.map((section) => (
+              <section
+                key={section.title}
+                className="mb-6"
+                aria-labelledby={`history-${section.title}`}>
+                <h2
+                  id={`history-${section.title}`}
+                  className="sticky top-0 z-10 bg-[var(--shell-workspace)] py-2 text-xs font-semibold tracking-wide text-[var(--shell-muted)] uppercase">
+                  {section.title}
+                </h2>
+                <div className="divide-y divide-[var(--shell-border)] rounded-2xl border border-[var(--shell-border)] bg-[var(--shell-raised)]">
+                  {section.data.map((conv) => {
+                    const title = getDisplayTitle(conv)
+                    return (
+                      <div key={conv.id} className="group flex items-start gap-2 p-2">
+                        <button
+                          type="button"
+                          aria-label={`Open ${title}`}
+                          onClick={() => handleTap(conv.id)}
+                          className="min-w-0 flex-1 rounded-xl px-3 py-2 text-left transition-colors hover:bg-[var(--shell-selected)] focus-visible:ring-2 focus-visible:ring-[var(--shell-signal)] focus-visible:outline-none">
+                          <p className="truncate text-sm font-medium text-[var(--shell-text)]">
+                            {title}
+                          </p>
+                          {conv.preview && (
+                            <p className="mt-0.5 line-clamp-2 text-xs text-[var(--shell-muted)]">
+                              {conv.preview}
+                            </p>
+                          )}
+                          <p className="mt-1 text-[11px] text-[var(--shell-muted)]">
+                            {formatDate(conv.updated_at)}
+                            {conv.message_count > 0 &&
+                              ` · ${conv.message_count} message${conv.message_count === 1 ? '' : 's'}`}
+                          </p>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Delete ${title}`}
+                          onClick={() => handleDelete(conv.id, title)}
+                          className="hover:bg-destructive/10 hover:text-destructive mt-2 flex size-8 shrink-0 items-center justify-center rounded-lg text-[var(--shell-muted)] opacity-70 transition-colors group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-[var(--shell-signal)] focus-visible:outline-none">
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+      </PageScrollBody>
+    </PageSurface>
   )
 }
 

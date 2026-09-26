@@ -11,6 +11,7 @@ out/
 .env.local
 .env.build
 .mcp.json
+配置项.txt
 
 # mobile build artifacts
 mobile/build/
@@ -59,3 +60,10 @@ openspec/.cache/
 !.claude/commands/
 .claude/commands/*
 !.claude/commands/deploy-mobile.md
+
+# Local GPT-SoVITS installation: an operator-supplied runtime, never a build
+# dependency. The voice providers reference it by configuration only.
+GPT-SoVITS-*/
+
+# Desktop runtime state (control state, logs) — never version controlled.
+desktop/data/

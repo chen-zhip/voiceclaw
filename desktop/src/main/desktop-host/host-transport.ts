@@ -250,6 +250,16 @@ export class DesktopHostRuntime {
     }
   }
 
+  // Host-side diagnostics are written through the single `log` seam so the
+  // Desktop can persist them; a missing seam falls back to the console.
+  #log(line: string): void {
+    if (this.options.log) {
+      this.options.log(line)
+      return
+    }
+    console.warn(line)
+  }
+
   async #openRemoteSocket(): Promise<void> {
     const stored = await this.options.credentialStore.load()
     if (!stored) throw new Error('host_credential_not_found')
@@ -272,9 +282,22 @@ export class DesktopHostRuntime {
 
   #attachSocket(socket: HostTransportSocket): void {
     socket.on('message', (data) => {
-      void this.#handleFrame(socket, data).catch(() => socket.close())
+      void this.#handleFrame(socket, data).catch((error: unknown) => {
+        this.#log(
+          `[desktop-host] frame handling failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        )
+        socket.close()
+      })
     })
-    socket.once('close', () => {
+    socket.once('close', (...closeArguments: unknown[]) => {
+      const [code, reason] = closeArguments as [number?, unknown?]
+      this.#log(
+        `[desktop-host] socket closed (code=${code ?? 'n/a'} reason=${
+          reason === undefined ? 'n/a' : String(reason)
+        })`
+      )
       const wasCurrent = this.#socket === socket
       if (wasCurrent) this.#socket = undefined
       for (const pending of this.#pendingReadiness) {
@@ -341,10 +364,25 @@ export class DesktopHostRuntime {
       payload: frame.payload,
     })
     if (!parsedRequest.success) throw new Error('invalid_host_invocation')
+    this.#log(
+      `[desktop-host] invocation received: operation=${parsedEnvelope.data.operation} invocation=${parsedEnvelope.data.invocationId}`
+    )
+    const streamedEvents: unknown[] = []
     const output = await this.options.invokeContribution({
       envelope: parsedEnvelope.data,
       payload: parsedRequest.data.payload,
+      ...(parsedEnvelope.data.operation === 'turn.start'
+        ? {
+            onEvent: (event: unknown) => {
+              streamedEvents.push(event)
+              socket.send?.(JSON.stringify({ version: 1, type: 'host.invocation.event', event }))
+            },
+          }
+        : {}),
     })
+    this.#log(
+      `[desktop-host] invocation completed: operation=${parsedEnvelope.data.operation} invocation=${parsedEnvelope.data.invocationId}`
+    )
     if (frame.type === 'host.invocation.cancel') return
     if (parsedEnvelope.data.operation !== 'turn.start') {
       const result = parseHarnessExecutionResult(parsedEnvelope.data.operation, output)
@@ -362,7 +400,7 @@ export class DesktopHostRuntime {
     }
     const stream = parseHarnessExecutionStream(output)
     if (!stream.success) throw new Error('invalid_host_output')
-    for (const event of stream.data as HarnessExecutionEvent[]) {
+    for (const event of (stream.data as HarnessExecutionEvent[]).slice(streamedEvents.length)) {
       socket.send(JSON.stringify({ version: 1, type: 'host.invocation.event', event }))
     }
   }

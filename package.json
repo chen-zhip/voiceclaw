@@ -35,6 +35,7 @@
     "release:ios:production": "cd mobile && yarn release:ios:production",
     "clean:mobile": "cd mobile && yarn clean",
     "dev:desktop": "cd desktop && yarn dev",
+    "dev:local": "node scripts/dev-local.mjs",
     "dev:docs": "cd docs && yarn dev",
     "build:docs": "cd docs && yarn build",
     "dev:tracing": "concurrently --names collector,ui \"yarn dev:tracing-collector\" \"yarn dev:tracing-ui\"",

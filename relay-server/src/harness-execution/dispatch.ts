@@ -49,6 +49,7 @@ export interface HarnessRoutingPort {
     text: string
     final: boolean
     binding: HarnessBindingInput
+    onDispatched?: (accepted: AcceptedHarnessAttempt) => void
   }): Promise<HarnessDispatchResult>
   completeAttempt(accepted: AcceptedHarnessAttempt, outcome: AttemptOutcome): Promise<void>
   cancelController(
@@ -90,6 +91,7 @@ export class HarnessExecutionDispatcher implements HarnessRoutingPort {
     text: string
     final: boolean
     binding: HarnessBindingInput
+    onDispatched?: (accepted: AcceptedHarnessAttempt) => void
   }): Promise<HarnessDispatchResult> {
     if (!input.final) return { status: 'queued', turnId: '' }
 
@@ -127,7 +129,22 @@ export class HarnessExecutionDispatcher implements HarnessRoutingPort {
       if (mapping.status === 'dormant') throw new Error('Harness Thread Mapping is dormant')
 
       const envelope = this.#envelope('turn.start', input.binding)
-      const response = await this.options.kernel.invoke(
+      const accepted: AcceptedHarnessAttempt = {
+        conversationId: input.conversationId,
+        turnId: turn.id,
+        attemptId: attempt.id,
+        identity: {
+          invocationId: envelope.invocationId,
+          bindingId: input.binding.bindingId,
+          threadId: mapping.threadId,
+          turnId: turn.id,
+          attemptId: attempt.id,
+          generation: input.binding.generation,
+        },
+        binding: input.binding,
+        events: [],
+      }
+      const execution = this.options.kernel.invoke(
         envelope,
         {
           bindingId: input.binding.bindingId,
@@ -139,27 +156,17 @@ export class HarnessExecutionDispatcher implements HarnessRoutingPort {
         },
         { authenticatedPrincipal: routingPrincipal }
       )
+      input.onDispatched?.(accepted)
+      accepted.events = harnessEvents(await execution)
 
       return {
         status: 'dispatched',
-        accepted: {
-          conversationId: input.conversationId,
-          turnId: turn.id,
-          attemptId: attempt.id,
-          identity: {
-            invocationId: envelope.invocationId,
-            bindingId: input.binding.bindingId,
-            threadId: mapping.threadId,
-            turnId: turn.id,
-            attemptId: attempt.id,
-            generation: input.binding.generation,
-          },
-          binding: input.binding,
-          events: harnessEvents(response),
-        },
+        accepted,
       }
     } catch (error) {
-      this.options.routing.abortDispatch(input.conversationId, attempt.id)
+      if (!this.options.routing.inspectAttempt(input.conversationId, attempt.id)?.outcome) {
+        this.options.routing.abortDispatch(input.conversationId, attempt.id)
+      }
       throw error
     }
   }

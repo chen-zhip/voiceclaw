@@ -8,6 +8,12 @@ import { Select } from '../components/ui/Select'
 import { Toggle } from '../components/ui/Toggle'
 import { DevicesCard } from '../components/DevicesCard'
 import { ShortcutsCard } from '../components/ShortcutsCard'
+import {
+  PageContentColumn,
+  PageHeader,
+  PageScrollBody,
+  PageSurface,
+} from '../components/layout/PageLayout'
 import { identityApi, onboarding, providerApi, type ProviderId } from '../lib/onboarding-api'
 import { decodeVoicePreviewAudio } from '../lib/voice-preview'
 import { useTheme, type Theme } from '../lib/use-theme'
@@ -156,6 +162,9 @@ export function SettingsPage() {
   const [harnessProviderId, setHarnessProviderId] = useState('')
   const [harnessWorkspaceBindingId, setHarnessWorkspaceBindingId] = useState('')
   const [harnessBindingId, setHarnessBindingId] = useState('')
+  const [harnessSttProvider, setHarnessSttProvider] = useState('')
+  const [harnessTtsProvider, setHarnessTtsProvider] = useState('')
+  const [harnessId, setHarnessId] = useState('')
 
   // Per-provider realtime API keys (Keychain-backed via main process).
   // We never read the secret back into the UI — only the list of which
@@ -228,6 +237,9 @@ export function SettingsPage() {
       setHarnessProviderId((await getSetting('harness_provider_id')) ?? '')
       setHarnessWorkspaceBindingId((await getSetting('harness_workspace_binding_id')) ?? '')
       setHarnessBindingId((await getSetting('harness_binding_id')) ?? '')
+      setHarnessSttProvider((await getSetting('harness_stt_provider')) ?? '')
+      setHarnessTtsProvider((await getSetting('harness_tts_provider')) ?? '')
+      setHarnessId((await getSetting('harness_id')) ?? '')
       const vol = await getSetting('realtime_volume')
       if (vol) setVolume(parseFloat(vol))
       const inDev = await getSetting('input_device_id')
@@ -357,12 +369,21 @@ export function SettingsPage() {
 
   const updateHarness = useCallback(
     (
-      key: 'harness_provider_id' | 'harness_workspace_binding_id' | 'harness_binding_id',
+      key:
+        | 'harness_provider_id'
+        | 'harness_workspace_binding_id'
+        | 'harness_binding_id'
+        | 'harness_stt_provider'
+        | 'harness_tts_provider'
+        | 'harness_id',
       v: string
     ) => {
       if (key === 'harness_provider_id') setHarnessProviderId(v)
       else if (key === 'harness_workspace_binding_id') setHarnessWorkspaceBindingId(v)
-      else setHarnessBindingId(v)
+      else if (key === 'harness_binding_id') setHarnessBindingId(v)
+      else if (key === 'harness_stt_provider') setHarnessSttProvider(v)
+      else if (key === 'harness_tts_provider') setHarnessTtsProvider(v)
+      else setHarnessId(v)
       if (loadedRef.current) save(key, v)
     },
     [save]
@@ -579,8 +600,18 @@ export function SettingsPage() {
   const outputDevices = audioDevices.filter((d) => d.kind === 'audiooutput')
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden">
-      <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
+    <PageSurface accessibleName="VoiceClaw settings">
+      <PageHeader>
+        <PageContentColumn>
+          <h1 className="text-xl font-semibold tracking-tight text-[var(--shell-text)]">
+            Settings
+          </h1>
+          <p className="mt-1 text-sm text-[var(--shell-muted)]">
+            Configure your assistant, voice, providers, and desktop experience.
+          </p>
+        </PageContentColumn>
+      </PageHeader>
+      <PageScrollBody contentClassName="space-y-4">
         {/* Devices */}
         <DevicesCard />
 
@@ -679,6 +710,7 @@ export function SettingsPage() {
               <div className="space-y-1">
                 <label className="text-muted-foreground text-xs">Provider ID</label>
                 <Input
+                  aria-label="Provider ID"
                   value={harnessProviderId}
                   onChange={(e) => updateHarness('harness_provider_id', e.target.value)}
                   placeholder="codex"
@@ -698,6 +730,30 @@ export function SettingsPage() {
                   value={harnessBindingId}
                   onChange={(e) => updateHarness('harness_binding_id', e.target.value)}
                   placeholder="binding-1"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-muted-foreground text-xs">STT provider</label>
+                <Input
+                  value={harnessSttProvider}
+                  onChange={(e) => updateHarness('harness_stt_provider', e.target.value)}
+                  placeholder="deepgram"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-muted-foreground text-xs">TTS provider</label>
+                <Input
+                  value={harnessTtsProvider}
+                  onChange={(e) => updateHarness('harness_tts_provider', e.target.value)}
+                  placeholder="elevenlabs"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-muted-foreground text-xs">Harness id</label>
+                <Input
+                  value={harnessId}
+                  onChange={(e) => updateHarness('harness_id', e.target.value)}
+                  placeholder="codex"
                 />
               </div>
             </div>
@@ -764,7 +820,10 @@ export function SettingsPage() {
 
           <div className="space-y-1.5">
             <label className="text-muted-foreground text-xs">Input (Microphone)</label>
-            <Select value={inputDeviceId} onChange={(e) => updateInputDevice(e.target.value)}>
+            <Select
+              aria-label="Input microphone"
+              value={inputDeviceId}
+              onChange={(e) => updateInputDevice(e.target.value)}>
               <option value="">System Default</option>
               {inputDevices.map((d) => (
                 <option key={d.deviceId} value={d.deviceId}>
@@ -776,7 +835,10 @@ export function SettingsPage() {
 
           <div className="space-y-1.5">
             <label className="text-muted-foreground text-xs">Output (Speaker)</label>
-            <Select value={outputDeviceId} onChange={(e) => updateOutputDevice(e.target.value)}>
+            <Select
+              aria-label="Output speaker"
+              value={outputDeviceId}
+              onChange={(e) => updateOutputDevice(e.target.value)}>
               <option value="">System Default</option>
               {outputDevices.map((d) => (
                 <option key={d.deviceId} value={d.deviceId}>
@@ -820,6 +882,8 @@ export function SettingsPage() {
             {(['dark', 'light', 'system'] as Theme[]).map((t) => (
               <button
                 key={t}
+                type="button"
+                aria-pressed={theme === t}
                 onClick={() => setTheme(t)}
                 className={`flex-1 rounded-md border px-3 py-2 text-sm capitalize transition-colors ${theme === t ? 'border-primary bg-accent text-foreground font-medium' : 'border-input text-muted-foreground hover:bg-accent'} `}>
                 {t}
@@ -1074,8 +1138,8 @@ export function SettingsPage() {
             <Toggle checked={telemetryEnabled} onChange={toggleTelemetry} />
           </div>
         </Card>
-      </div>
-    </div>
+      </PageScrollBody>
+    </PageSurface>
   )
 }
 

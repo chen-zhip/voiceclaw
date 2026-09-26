@@ -10,6 +10,13 @@ export interface STTConfig {
 export type TranscriptCallback = (text: string) => void
 
 export interface STTProvider {
+  /**
+   * How long the pipeline should wait for a final transcript after the client
+   * commits audio. Streaming providers answer within seconds; a locally hosted
+   * recognizer that loads models per utterance needs a longer budget.
+   */
+  readonly finalTranscriptDeadlineMs?: number
+
   connect(config: STTConfig): Promise<void>
 
   /** Feed base64 PCM16 from the client into the recognizer. */

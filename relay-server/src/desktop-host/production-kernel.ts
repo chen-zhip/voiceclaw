@@ -1,11 +1,13 @@
 import { delimiter } from 'node:path'
 import type { ControlStateStore } from '../plugin-kernel/control-state-store.js'
-import { PhaseZeroKernel } from '../plugin-kernel/phase-zero-kernel.js'
+import { PhaseZeroKernel, type HostTransport } from '../plugin-kernel/phase-zero-kernel.js'
+import { localProviderConfigurations } from './local-profile.js'
 
 export async function bootstrapProductionHostKernel(
   environment: NodeJS.ProcessEnv,
   controlStatePath: string,
-  controlState: ControlStateStore
+  controlState: ControlStateStore,
+  hostTransport?: HostTransport
 ): Promise<PhaseZeroKernel | undefined> {
   const roots =
     environment.VOICECLAW_SHIPPED_PLUGIN_ROOTS?.split(delimiter)
@@ -20,15 +22,21 @@ export async function bootstrapProductionHostKernel(
     developmentAllowlistedRoots: [],
     voiceclawVersion: environment.VOICECLAW_VERSION?.trim() || '0.1.0',
     controlStatePath,
+    controlState,
+    ...(hostTransport ? { hostTransport } : {}),
     selectedProviders: {
       'harness.execution': { packageId, contributionId },
     },
-    configurations: {},
+    configurations: localProviderConfigurations(environment),
     grants: [...controlState.read().grants],
     assignments: [...controlState.read().assignments],
+    // Only reached when no Host transport is wired: fail closed with an
+    // actionable message instead of dispatching anywhere else.
     loadContribution: async () => ({
       invoke: async () => {
-        throw new Error('desktop_host_transport_required')
+        throw new Error(
+          'No Desktop Host transport is connected; connect a Desktop Host for this Harness binding'
+        )
       },
     }),
   })

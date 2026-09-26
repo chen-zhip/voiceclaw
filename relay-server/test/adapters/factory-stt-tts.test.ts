@@ -87,7 +87,125 @@ describe('STT/TTS adapter factory', () => {
       expect(constructed).toEqual([])
     }
   })
+
+  it('resolves missing Harness components from the relay configuration', () => {
+    const seen: string[] = []
+    process.env.VOICECLAW_STT_PROVIDER = 'gpt-sovits-stt'
+    process.env.VOICECLAW_TTS_PROVIDER = 'gpt-sovits-tts'
+    process.env.VOICECLAW_HARNESS_ID = 'codex'
+    try {
+      const adapter = createAdapter(
+        sessionConfig({
+          mode: 'stt-tts',
+          sttProvider: undefined,
+          ttsProvider: undefined,
+          harness: undefined,
+        }),
+        { ...recordingDependencies(seen), harnessRouting: hostRoutedPort() }
+      )
+
+      expect(adapter).toBeInstanceOf(ComposedAdapter)
+      expect(seen).toEqual(['stt:gpt-sovits-stt', 'harness:codex', 'tts:gpt-sovits-tts'])
+    } finally {
+      clearDeclaredComponents()
+    }
+  })
+
+  it('prefers client-supplied components over the relay configuration', () => {
+    const seen: string[] = []
+    process.env.VOICECLAW_STT_PROVIDER = 'gpt-sovits-stt'
+    process.env.VOICECLAW_TTS_PROVIDER = 'gpt-sovits-tts'
+    process.env.VOICECLAW_HARNESS_ID = 'codex'
+    try {
+      createAdapter(sessionConfig({ mode: 'stt-tts' }), recordingDependencies(seen))
+
+      expect(seen).toEqual(['stt:deepgram', 'harness:claude-code', 'tts:elevenlabs'])
+    } finally {
+      clearDeclaredComponents()
+    }
+  })
+
+  it('never selects a local provider implicitly', () => {
+    clearDeclaredComponents()
+    const unconfigured: string[] = []
+    expect(() =>
+      createAdapter(
+        sessionConfig({ mode: 'stt-tts', sttProvider: undefined, ttsProvider: undefined }),
+        recordingDependencies(unconfigured)
+      )
+    ).toThrowError(/sttProvider is required when mode is stt-tts/)
+    expect(unconfigured).toEqual([])
+
+    const explicit: string[] = []
+    createAdapter(
+      sessionConfig({
+        mode: 'stt-tts',
+        sttProvider: 'gpt-sovits-stt',
+        ttsProvider: 'gpt-sovits-tts',
+      }),
+      recordingDependencies(explicit)
+    )
+    expect(explicit).toEqual(['stt:gpt-sovits-stt', 'harness:claude-code', 'tts:gpt-sovits-tts'])
+  })
+
+  it('accepts a Harness owned by the Desktop Host only when execution is routed there', () => {
+    const routed: string[] = []
+    expect(
+      createAdapter(sessionConfig({ mode: 'stt-tts', harness: 'codex' }), {
+        ...recordingDependencies(routed),
+        harnessRouting: hostRoutedPort(),
+      })
+    ).toBeInstanceOf(ComposedAdapter)
+    expect(routed).toEqual(['stt:deepgram', 'harness:codex', 'tts:elevenlabs'])
+
+    const unrouted: string[] = []
+    expect(() =>
+      createAdapter(
+        sessionConfig({ mode: 'stt-tts', harness: 'codex' }),
+        recordingDependencies(unrouted)
+      )
+    ).toThrowError(/boundary codex is not available/)
+  })
+
+  it('constructs a Host-routed Harness session without a local adapter', () => {
+    expect(() =>
+      createAdapter(sessionConfig({ mode: 'stt-tts', harness: 'codex' }), {
+        harnessRouting: hostRoutedPort(),
+      })
+    ).not.toThrow()
+  })
 })
+
+function hostRoutedPort() {
+  return {
+    acceptTranscript: async () => ({ status: 'queued' as const, turnId: '' }),
+    completeAttempt: async () => undefined,
+    cancelController: () => ({ cancel: async () => ({ accepted: false as const, code: 'none' }) }),
+  } as never
+}
+
+function recordingDependencies(seen: string[]): AdapterFactoryDependencies {
+  return {
+    createSTTProvider: (name) => {
+      seen.push(`stt:${name}`)
+      return sttProvider()
+    },
+    createHarnessAdapter: (id) => {
+      seen.push(`harness:${id}`)
+      return harnessAdapter()
+    },
+    createTTSProvider: (name) => {
+      seen.push(`tts:${name}`)
+      return ttsProvider()
+    },
+  }
+}
+
+function clearDeclaredComponents(): void {
+  delete process.env.VOICECLAW_STT_PROVIDER
+  delete process.env.VOICECLAW_TTS_PROVIDER
+  delete process.env.VOICECLAW_HARNESS_ID
+}
 
 class PipelineSTT implements STTProvider {
   private finalTranscript: (text: string) => void = () => {}

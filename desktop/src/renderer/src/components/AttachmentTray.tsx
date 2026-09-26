@@ -12,22 +12,21 @@ interface AttachmentTrayProps {
 export function AttachmentTray({ pending, onRemove, onSend, sending }: AttachmentTrayProps) {
   if (pending.length === 0) return null
   return (
-    <div className="px-4 py-2 border-t border-border bg-background/65">
+    <div className="mb-2 rounded-2xl border border-[var(--shell-border)] bg-[var(--shell-raised)] px-4 py-3">
       <div className="flex items-end gap-3">
-        <div className="flex flex-wrap gap-2 flex-1">
+        <div className="flex flex-1 flex-wrap gap-2">
           {pending.map((p) => (
-            <div key={p.id} className="relative group">
+            <div key={p.id} className="group relative">
               <img
                 src={p.previewUrl}
                 alt={p.originalName ?? 'pending attachment'}
-                className="w-16 h-16 object-cover rounded-md border border-border"
+                className="border-border h-16 w-16 rounded-md border object-cover"
               />
               <button
                 type="button"
                 aria-label="Remove attachment"
                 onClick={() => onRemove(p.id)}
-                className="absolute -top-1.5 -right-1.5 size-5 rounded-full bg-card border border-border text-muted-foreground hover:text-destructive transition-colors flex items-center justify-center"
-              >
+                className="bg-card border-border text-muted-foreground hover:text-destructive absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full border transition-colors">
                 <X size={12} />
               </button>
             </div>
