@@ -8,11 +8,7 @@ import {
 } from 'react'
 import { Paperclip, Send } from 'lucide-react'
 import { Button } from './ui/Button'
-import {
-  COMPOSER_LIMITS,
-  isSubmittable,
-  normalizeComposerText,
-} from '../lib/composer'
+import { COMPOSER_LIMITS, isSubmittable, normalizeComposerText } from '../lib/composer'
 
 export interface ChatComposerProps {
   onSubmit: (text: string) => void
@@ -50,7 +46,7 @@ export function ChatComposer({
         submit()
       }
     },
-    [submit],
+    [submit]
   )
 
   useLayoutEffect(() => {
@@ -68,7 +64,7 @@ export function ChatComposer({
   const canSubmit = !disabled && isSubmittable(value)
 
   return (
-    <div className="px-4 py-3 border-t border-border bg-background/80 backdrop-blur">
+    <div className="rounded-3xl border border-[var(--shell-border)] bg-[var(--shell-raised)] p-2 shadow-xl shadow-black/10">
       <div className="flex items-end gap-2">
         {onAttach && (
           // Wrap in a span so the tooltip still shows when the button
@@ -80,16 +76,14 @@ export function ChatComposer({
                 ? attachDisabledReason
                 : 'Attach an image (PNG, JPG, WEBP, ≤10MB)'
             }
-            className="inline-flex"
-          >
+            className="inline-flex">
             <Button
               variant="secondary"
               size="icon"
               onClick={onAttach}
               disabled={disabled || Boolean(attachDisabledReason)}
               aria-label="Attach an image"
-              aria-disabled={Boolean(attachDisabledReason) || undefined}
-            >
+              aria-disabled={Boolean(attachDisabledReason) || undefined}>
               <Paperclip size={18} />
             </Button>
           </span>
@@ -103,13 +97,7 @@ export function ChatComposer({
           disabled={disabled}
           placeholder={placeholder ?? 'Type a message — Enter sends, Shift+Enter for newline'}
           aria-label="Type a message"
-          className="
-            flex-1 resize-none rounded-md border border-input bg-background px-3 py-2.5
-            text-sm text-foreground placeholder:text-muted-foreground leading-5
-            focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50
-            disabled:opacity-50 disabled:cursor-not-allowed
-            whitespace-pre-wrap
-          "
+          className="text-foreground placeholder:text-muted-foreground flex-1 resize-none rounded-2xl border border-transparent bg-transparent px-3 py-2.5 text-sm leading-5 whitespace-pre-wrap focus:ring-2 focus:ring-[var(--shell-signal)]/35 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
           style={{ minHeight: minHeightPx(), maxHeight: maxHeightPx() }}
         />
         <Button
@@ -118,8 +106,7 @@ export function ChatComposer({
           onClick={submit}
           disabled={!canSubmit}
           aria-label="Send message"
-          title="Send (Enter)"
-        >
+          title="Send (Enter)">
           <Send size={18} />
         </Button>
       </div>

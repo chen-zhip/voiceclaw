@@ -11,7 +11,7 @@ import { getProviderKey, type ProviderId } from '../provider-keys'
 import { resolveBundledNode } from './node-runtime'
 import { getDeviceTokenBridge } from './device-token-bridge'
 import { getOpenClawConfigPath, readGatewayAuthToken } from './openclaw-gateway'
-import { serviceManager } from './service-manager'
+import { serviceManager, type ServiceStatus } from './service-manager'
 
 const PREFERRED_RELAY_PORT = 8080
 
@@ -136,6 +136,7 @@ export async function startBundledRelayServer(
   options: {
     createBootstrapSecret?: () => string
     createStackId?: () => string
+    localBindings?: LocalBindingIdentity[]
   } = {}
 ): Promise<void> {
   const spec = resolveRelaySpawn()
@@ -168,7 +169,7 @@ export async function startBundledRelayServer(
     console.warn('[relay-tls] ensureTailscaleTlsHandle threw (ignored)', err)
   }
 
-  const env = buildRelayEnv()
+  const env = buildRelayEnv({ localBindings: options.localBindings })
   if (spec.command === process.execPath) {
     // Strip Electron's GUI bootstrap so the binary acts as plain Node
     // while tsx loads the relay-server TypeScript source.
@@ -189,6 +190,23 @@ export async function startBundledRelayServer(
     expireBundledHostLaunch()
     throw error
   }
+  // A Relay that dies in its first seconds (a bad shipped plugin root, a port
+  // clash, a missing dependency) leaves nothing listening, and the Desktop Host
+  // would then fail with an unrelated connect error. Report the service state
+  // the Desktop actually observed instead.
+  const failure = describeRelayStartFailure(serviceManager.getStatus('relay'))
+  if (failure) {
+    expireBundledHostLaunch()
+    throw new Error(`${failure}; see relay-server.log`)
+  }
+}
+
+export function describeRelayStartFailure(status: ServiceStatus): string | null {
+  if (status.state === 'running') return null
+  if (status.state === 'failed') return `bundled Relay failed its health check: ${status.reason}`
+  if (status.state === 'crashed')
+    return `bundled Relay exited during startup (code=${status.lastExitCode ?? 'unknown'})`
+  return `bundled Relay did not start (state=${status.state})`
 }
 
 export function getBundledHostRuntimeEnvironment(): NodeJS.ProcessEnv | null {
@@ -196,10 +214,11 @@ export function getBundledHostRuntimeEnvironment(): NodeJS.ProcessEnv | null {
 }
 
 export function getBundledHostUrl(): string | null {
-  const clientUrl =
-    getTailnetUrl() ??
-    (getAllocatedPorts().relay ? `ws://127.0.0.1:${getAllocatedPorts().relay}/ws` : null)
-  return clientUrl?.replace(/\/ws$/, '/host/ws') ?? null
+  // The bundled Host runs on the same machine as the Relay it bootstraps, so it
+  // must use loopback. Pairing addresses (tailnet or LAN) are for Clients.
+  const port = getAllocatedPorts().relay
+  if (!port) return null
+  return `ws://127.0.0.1:${port}/host/ws`
 }
 
 export function expireBundledHostLaunch(): void {
@@ -253,7 +272,16 @@ export function resolveDevSourceRelay(): RelaySpawnSpec | null {
   return { command: process.execPath, args: [tsxCli, script] }
 }
 
-export function buildRelayEnv(): NodeJS.ProcessEnv {
+export interface LocalBindingIdentity {
+  bindingId: string
+  providerId: string
+  workspaceBindingId: string
+  workspacePath?: string
+}
+
+export function buildRelayEnv(
+  options: { localBindings?: LocalBindingIdentity[] } = {}
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = forwardedEnv()
   if (bundledHostLaunch) Object.assign(env, launchEnvironment(bundledHostLaunch))
   for (const provider of Object.keys(PROVIDER_ENV_KEYS) as ProviderId[]) {
@@ -298,6 +326,22 @@ export function buildRelayEnv(): NodeJS.ProcessEnv {
     if (!env.RELAY_TLS_CERT) env.RELAY_TLS_CERT = tls.certPath
     if (!env.RELAY_TLS_KEY) env.RELAY_TLS_KEY = tls.keyPath
   }
+  if (options.localBindings && options.localBindings.length > 0) {
+    // Identities plus the declared non-secret configuration the Provider needs;
+    // secret references are never handed to the Relay.
+    env.VOICECLAW_LOCAL_BINDINGS = JSON.stringify(
+      options.localBindings.map(({ bindingId, providerId, workspaceBindingId, workspacePath }) => ({
+        bindingId,
+        providerId,
+        workspaceBindingId,
+        ...(workspacePath === undefined ? {} : { workspacePath }),
+      }))
+    )
+  }
+  // A local install works out of the box with the cloud providers; a locally
+  // hosted provider is only ever used when the operator declares it.
+  if (!env.VOICECLAW_STT_PROVIDER) env.VOICECLAW_STT_PROVIDER = 'deepgram'
+  if (!env.VOICECLAW_TTS_PROVIDER) env.VOICECLAW_TTS_PROVIDER = 'elevenlabs'
   return env
 }
 
@@ -377,6 +421,26 @@ const FORWARDED_KEYS = [
   'RELAY_TLS_CERT',
   'RELAY_TLS_KEY',
   'VOICECLAW_MOBILE_SCHEME',
+  // Local voice provider settings and the Harness plugin selection are read by
+  // the Relay process, so the bundled spawn has to carry them explicitly.
+  'GPT_SOVITS_SERVICE_URL',
+  'GPT_SOVITS_REFERENCE_AUDIO',
+  'GPT_SOVITS_TEXT_LANG',
+  'GPT_SOVITS_PROMPT_TEXT',
+  'GPT_SOVITS_PROMPT_LANG',
+  'GPT_SOVITS_ROOT',
+  'GPT_SOVITS_PYTHON',
+  'GPT_SOVITS_ASR_LANGUAGE',
+  'VOICECLAW_SHIPPED_PLUGIN_ROOTS',
+  'VOICECLAW_HARNESS_PACKAGE_ID',
+  'VOICECLAW_HARNESS_CONTRIBUTION_ID',
+  'VOICECLAW_VERSION',
+  'VOICECLAW_STT_PROVIDER',
+  'VOICECLAW_TTS_PROVIDER',
+  'VOICECLAW_STT_TTS_DEBUG',
+  'VOICECLAW_HARNESS_ID',
+  'DEEPGRAM_API_KEY',
+  'ELEVENLABS_API_KEY',
 ] as const
 
 const PROVIDER_ENV_KEYS: Record<ProviderId, string> = {

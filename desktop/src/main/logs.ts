@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { mkdirSync, createWriteStream } from 'fs'
+import { appendFileSync, mkdirSync, createWriteStream } from 'fs'
 import { join } from 'path'
 
 // Central log directory for VoiceClaw + the services it spawns. Creating
@@ -26,4 +26,14 @@ export function openLogStream(filename: string): ReturnType<typeof createWriteSt
 
 export function logFilePath(filename: string): string {
   return join(getLogDir(), filename)
+}
+
+// Best-effort append for low-volume diagnostic lines that must survive the
+// process that produced them; callers still print through their own channel.
+export function appendLogLine(filename: string, line: string): void {
+  try {
+    appendFileSync(logFilePath(filename), `${line}\n`)
+  } catch {
+    // Losing a diagnostic line must never take a running service down.
+  }
 }

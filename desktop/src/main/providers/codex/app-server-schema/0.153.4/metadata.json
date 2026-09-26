@@ -1,0 +1,133 @@
+{
+  "generator": {
+    "name": "codex-cli",
+    "version": "0.153.4"
+  },
+  "command": "codex app-server generate-json-schema --out <DIR>",
+  "sha256": "9d4323a9cbd22361d688490c42044ff1d8dbc1fd6085c557768c3d9166eb689e",
+  "sha256Algorithm": "sha256 over '<relative path>\\n<file sha256>\\n' for every path in ordinal sort order",
+  "note": "Immutable app-server JSON Schema subset for the exactly verified Codex Capability Profile. Regenerating it is a deliberate, reviewed change; runtime never regenerates or fetches it.",
+  "files": [
+    {
+      "path": "JSONRPCMessage.json",
+      "sha256": "6da4cc373a7ccd01f5608ad4496eeb4d44b6a9b0d3158e85ed66b59f3c0b5114"
+    },
+    {
+      "path": "JSONRPCRequest.json",
+      "sha256": "31bd6f360b2dd8a7ceaf682708105d40d38cb0b9d0821357a04da67028438f73"
+    },
+    {
+      "path": "JSONRPCResponse.json",
+      "sha256": "4796738c04c74288213a08fb8d820c7b4df19e0977cdcd35b65ffcb43cfc93ab"
+    },
+    {
+      "path": "JSONRPCNotification.json",
+      "sha256": "c2b43f26880db331393fe09f34bdd76dfeb4dc30d8418d1c26e18db166d6c8c8"
+    },
+    {
+      "path": "JSONRPCError.json",
+      "sha256": "d7ea353d4875ae204625da5a00a1ecb5afc69101d5778b9acc253a49f8932992"
+    },
+    {
+      "path": "v1/InitializeParams.json",
+      "sha256": "6f0094be9a65242ec779a40794cbd4fdfa32fca1e45084a16adfb50501d33ea2"
+    },
+    {
+      "path": "v1/InitializeResponse.json",
+      "sha256": "62ad689c2cb6379913c1d72749cfd8de5089d35760214123518eb92eef11acc9"
+    },
+    {
+      "path": "v2/ThreadStartParams.json",
+      "sha256": "792e2f32e37cece971bd616664ea2053741acbed4e9c92e9d1766427718f2ecd"
+    },
+    {
+      "path": "v2/ThreadStartResponse.json",
+      "sha256": "656f8fd0fe91f533126cbfdb9369cfab550927a229e48dd46460f6f015d2b186"
+    },
+    {
+      "path": "v2/ThreadResumeParams.json",
+      "sha256": "8ac68582a81d60940b10b330be8546123f56bfe246b56f8a4f121da00f347cf2"
+    },
+    {
+      "path": "v2/ThreadResumeResponse.json",
+      "sha256": "a553d6b1eb66111ca556e22138017ec54fd07c3257dbd2d5ad97ad7660786345"
+    },
+    {
+      "path": "v2/TurnStartParams.json",
+      "sha256": "a3835e8c1e942e4b358e1a670939b89918b16c4d13105a579899892b7ade6dea"
+    },
+    {
+      "path": "v2/TurnStartResponse.json",
+      "sha256": "6fc49c3e5d0ce11a3a109ae194619b04d6e3ff98fa29bac683fdb754608958be"
+    },
+    {
+      "path": "v2/TurnInterruptParams.json",
+      "sha256": "6dff382dae73d1dbc58406ed045605f647e7a49660e2540fbd2c6c24d60c5f2b"
+    },
+    {
+      "path": "v2/TurnInterruptResponse.json",
+      "sha256": "531de6be06fe979b5963f249bab82498a175e614bf65ac12fb2e849dfe60bcf1"
+    },
+    {
+      "path": "v2/TurnCompletedNotification.json",
+      "sha256": "78af2a37391e8e669a4020cb58593e4d3e378756ced79d5fec72374fa69fb94b"
+    },
+    {
+      "path": "v2/ErrorNotification.json",
+      "sha256": "d77732536ef8864799e4fbb5bf6965a9f1970a6195e523f144252a82287c08e7"
+    },
+    {
+      "path": "v2/ItemStartedNotification.json",
+      "sha256": "c4c34f47db6326cd4841bae428f23d08eb285077ffad35be9772b928c65bb912"
+    },
+    {
+      "path": "v2/ItemCompletedNotification.json",
+      "sha256": "69aba3fe5f72f38bf5c541e7e2c09de40778abe65ff969d9fc73372037812091"
+    },
+    {
+      "path": "v2/AgentMessageDeltaNotification.json",
+      "sha256": "996e6c0ea65e57bed5a00f410b94381fe5ebf804333e5d00c2b6e6d47e5c55f6"
+    },
+    {
+      "path": "v2/ThreadTokenUsageUpdatedNotification.json",
+      "sha256": "aba4f6c7e4a19b2b842c08ee793b57000c07dafd57b922ad0d8e7c76609108c2"
+    }
+  ],
+  "shapes": {
+    "initialize": [
+      "v1/InitializeParams.json",
+      "v1/InitializeResponse.json"
+    ],
+    "thread": [
+      "v2/ThreadStartParams.json",
+      "v2/ThreadStartResponse.json",
+      "v2/ThreadResumeParams.json",
+      "v2/ThreadResumeResponse.json"
+    ],
+    "turn": [
+      "v2/TurnStartParams.json",
+      "v2/TurnStartResponse.json"
+    ],
+    "item": [
+      "v2/ItemStartedNotification.json",
+      "v2/ItemCompletedNotification.json",
+      "v2/AgentMessageDeltaNotification.json"
+    ],
+    "interruption": [
+      "v2/TurnInterruptParams.json",
+      "v2/TurnInterruptResponse.json"
+    ],
+    "terminal": [
+      "v2/TurnCompletedNotification.json",
+      "v2/ErrorNotification.json",
+      "v2/ThreadTokenUsageUpdatedNotification.json"
+    ]
+  },
+  "envelope": [
+    "JSONRPCMessage.json",
+    "JSONRPCRequest.json",
+    "JSONRPCResponse.json",
+    "JSONRPCNotification.json",
+    "JSONRPCError.json"
+  ]
+}

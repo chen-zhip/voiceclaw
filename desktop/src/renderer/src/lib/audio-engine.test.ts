@@ -9,13 +9,21 @@ type FakeSource = {
   onended: (() => void) | null
 }
 
-type FakeGain = { gain: { value: number }, connect: ReturnType<typeof vi.fn> }
+type FakeGain = { gain: { value: number }; connect: ReturnType<typeof vi.fn> }
 
 type FakeContext = {
+  state: 'running' | 'suspended'
   currentTime: number
   destination: object
-  createBuffer: (channels: number, length: number, rate: number) => { duration: number, copyToChannel: ReturnType<typeof vi.fn> }
+  createGain: () => FakeGain
+  createAnalyser: () => { fftSize: number; getFloatTimeDomainData: ReturnType<typeof vi.fn> }
+  createBuffer: (
+    channels: number,
+    length: number,
+    rate: number
+  ) => { duration: number; copyToChannel: ReturnType<typeof vi.fn> }
   createBufferSource: () => FakeSource
+  resume: ReturnType<typeof vi.fn>
 }
 
 let ctx: FakeContext
@@ -30,6 +38,27 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
+
+describe('AudioEngine playback initialization', () => {
+  it('initializes output playback without requiring microphone capture', async () => {
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        constructor() {
+          return ctx
+        }
+      }
+    )
+    const engine = new AudioEngine()
+
+    await engine.startPlayback()
+    engine.playAudio(silentBase64Chunk(2400))
+
+    expect(createdSources).toHaveLength(1)
+    expect(ctx.resume).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('AudioEngine.playAudio scheduling', () => {
@@ -128,8 +157,11 @@ function makeEngine(): AudioEngine {
 
 function makeFakeContext(): FakeContext {
   return {
+    state: 'suspended',
     currentTime: 0,
     destination: {},
+    createGain: () => gain,
+    createAnalyser: () => ({ fftSize: 0, getFloatTimeDomainData: vi.fn() }),
     createBuffer: (_channels: number, length: number, rate: number) => ({
       duration: length / rate,
       copyToChannel: vi.fn(),
@@ -145,6 +177,7 @@ function makeFakeContext(): FakeContext {
       createdSources.push(source)
       return source
     },
+    resume: vi.fn(async () => undefined),
   }
 }
 

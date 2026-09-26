@@ -21,6 +21,13 @@ import {
 } from './services/relay-server'
 import { DesktopHostCredentialStore } from './desktop-host/host-transport'
 import { DesktopHostRuntime } from './desktop-host/host-transport'
+import { createHostContributionLoader } from './desktop-host/host-plugin-wiring'
+import {
+  createHostProviderContextFactory,
+  listLocalBindingHandoff,
+  reportConfiguredBindingReadiness,
+} from './desktop-host/host-provider-context'
+import { createCodexProcessBoundary } from './providers/codex/codex-process-boundary'
 import {
   registerHostManagementIpc,
   RelayHostManagementClient,
@@ -41,6 +48,7 @@ import {
 } from './device-tokens'
 import { applyGeminiKeyToOpenClawConfig } from './services/openclaw-gateway'
 import { buildDiagnosticBundle } from './services/diagnostic-bundle'
+import { appendLogLine } from './logs'
 import {
   type AgentIdentity,
   readAgentIdentity,
@@ -86,24 +94,30 @@ export function registerIpcHandlers(): DesktopHostRuntime {
     safeStorage,
     new SqliteHostCredentialPersistence(getDb)
   )
-  const nativeConfiguration = new NativeProviderConfigurationService(
-    new DesktopSettingsStorage(getDb()),
-    {
-      preferences: {
-        model: { type: 'string' },
-        approvalPolicy: { type: 'enum', values: ['ask', 'never'] },
-      },
-      readinessFields: [
-        'providerId',
-        'bindingId',
-        'workspaceBindingId',
-        'configured',
-        'executableDetected',
-      ],
-    }
-  )
+  const nativeConfigurationStorage = new DesktopSettingsStorage(getDb())
+  const nativeConfiguration = new NativeProviderConfigurationService(nativeConfigurationStorage, {
+    preferences: {
+      model: { type: 'string' },
+      approvalPolicy: { type: 'enum', values: ['ask', 'never'] },
+    },
+    readinessFields: [
+      'providerId',
+      'bindingId',
+      'workspaceBindingId',
+      'configured',
+      'executableDetected',
+    ],
+  })
   let desktopHostRuntime: DesktopHostRuntime
-  const hostContributions = new DesktopHostContributionRuntime(async () => [])
+  const hostContributions = new DesktopHostContributionRuntime(async () =>
+    createHostContributionLoader({
+      environment: process.env,
+      activeHostId: getBundledHostRuntimeEnvironment()?.VOICECLAW_LOCAL_HOST_ID ?? 'local-host',
+      createProviderContext: createHostProviderContextFactory({
+        storage: nativeConfigurationStorage,
+      }),
+    })()
+  )
   desktopHostRuntime = new DesktopHostRuntime({
     credentialStore: hostCredentialStore,
     configuration: nativeConfiguration,
@@ -115,6 +129,27 @@ export function registerIpcHandlers(): DesktopHostRuntime {
         const url = getBundledHostUrl()
         if (environment && url) {
           await desktopHostRuntime.connectLocal(url, environment)
+          // Readiness reporting is best-effort: a Relay that refuses or closes
+          // the report must not take the Host runtime down with it.
+          try {
+            const handoff = await listLocalBindingHandoff(nativeConfigurationStorage)
+            const detect = createCodexProcessBoundary({ environment: process.env }).detectExecutable
+            const reported = await reportConfiguredBindingReadiness({
+              storage: nativeConfigurationStorage,
+              report: async (binding) => {
+                const executablePath = handoff.find(
+                  (candidate) => candidate.bindingId === binding.bindingId
+                )?.executablePath
+                const ready = executablePath ? await detect(executablePath) : false
+                await desktopHostRuntime.reportReadiness({ ...binding, ready })
+              },
+            })
+            console.log(`[desktop-host] reported readiness for ${reported} binding(s)`)
+          } catch (error) {
+            console.warn(
+              `[desktop-host] readiness reporting failed: ${error instanceof Error ? error.message : String(error)}`
+            )
+          }
           return
         }
         const remoteUrl = configuredRemoteHostUrl()
@@ -125,6 +160,10 @@ export function registerIpcHandlers(): DesktopHostRuntime {
     },
     invokeContribution: (input) => hostContributions.invoke(input),
     contributionRegistrations: () => hostContributions.registrations(),
+    log: (line) => {
+      console.log(line)
+      appendLogLine('desktop-host.log', line)
+    },
   })
   registerNativeProviderConfigurationIpc(ipcMain, desktopHostRuntime)
   registerHostManagementIpc(

@@ -10,6 +10,7 @@ repos:
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
+        exclude: ^desktop/src/main/providers/codex/app-server-schema/
       - id: check-added-large-files
       - id: check-merge-conflict
       - id: check-yaml
@@ -18,6 +19,7 @@ repos:
   - repo: local
     hooks:
       - id: prettier
+        exclude: ^desktop/src/main/providers/codex/app-server-schema/
         name: Prettier (staged files)
         entry: yarn prettier --write --ignore-unknown
         language: system

@@ -34,6 +34,7 @@ type LiveAttempt = {
   providerId: string
   envelope: KernelInvocationEnvelope
   payload: Record<string, unknown>
+  createdAt: number
   fence: GenerationStreamFence
   events: HarnessExecutionEvent[]
   onEvent(event: HarnessExecutionEvent): void
@@ -49,6 +50,7 @@ type LiveResultAttempt = {
   hostId: string
   providerId: string
   envelope: KernelInvocationEnvelope
+  createdAt: number
   reject(error: Error): void
   resolve(value: { result: Record<string, unknown> }): void
 }
@@ -131,6 +133,13 @@ export function mountRelayWebSocketGateways(
           webSocket.once('close', () => {
             if (hostSockets.get(principal.id) !== webSocket) return
             hostSockets.delete(principal.id)
+            console.warn(
+              `[relay] host socket closed: host=${principal.id} pendingInvocations=${
+                [...attempts.values()].filter((attempt) => attempt.hostId === principal.id).length +
+                [...resultAttempts.values()].filter((attempt) => attempt.hostId === principal.id)
+                  .length
+              }`
+            )
             for (const [invocationId, attempt] of attempts) {
               if (attempt.hostId !== principal.id) continue
               const outcome = attempt.disconnect.disconnect()
@@ -195,11 +204,21 @@ export function mountRelayWebSocketGateways(
       const parsedEnvelope = parseKernelInvocationEnvelope(input.envelope)
       if (!parsedEnvelope.success) throw gatewayInvocationError('invalid_host_request')
       const envelope = parsedEnvelope.data
+      if (envelope.operation === 'turn.cancel') {
+        return { result: await hostControl.cancel(input) }
+      }
       const parsedRequest = parseHarnessExecutionRequest({
         operation: envelope.operation,
         payload: input.payload,
       })
-      if (!parsedRequest.success || envelope.operation === 'turn.cancel') {
+      if (!parsedRequest.success) {
+        console.warn(
+          `[relay] invalid_host_request detail: operation=${envelope.operation} requestAccepted=${
+            parsedRequest.success
+          } payloadKeys=${Object.keys(input.payload ?? {})
+            .sort()
+            .join(',')} invocation=${envelope.invocationId}`
+        )
         throw gatewayInvocationError('invalid_host_request')
       }
       const payload = parsedRequest.data.payload
@@ -222,6 +241,13 @@ export function mountRelayWebSocketGateways(
           payloadGeneration: payload.generation,
         })
       ) {
+        console.warn(
+          `[relay] stale_generation detail: assignment=${
+            assignment
+              ? `${assignment.status}@gen${assignment.generation} host=${assignment.hostId} provider=${assignment.providerId} workspace=${assignment.workspaceBindingId}`
+              : 'missing'
+          } expected=gen${envelope.generation} host=${input.hostId} provider=${input.providerId} workspace=${String(envelope.scope.id)} payloadGeneration=${String(payload.generation)}`
+        )
         throw gatewayInvocationError('stale_generation')
       }
       if (!options.authorizeInvocation?.({ hostId: input.hostId, envelope, payload })) {
@@ -248,6 +274,25 @@ export function mountRelayWebSocketGateways(
         [...resultAttempts.values()].filter((attempt) => attempt.bindingId === assignment.bindingId)
           .length
       if (activeForBinding >= 1) {
+        const now = Date.now()
+        const blocking = [
+          ...[...attempts].map(([id, attempt]) => ({
+            id,
+            bindingId: attempt.payload.bindingId,
+            ageMs: now - attempt.createdAt,
+          })),
+          ...[...resultAttempts].map(([id, attempt]) => ({
+            id,
+            bindingId: attempt.bindingId,
+            ageMs: now - attempt.createdAt,
+          })),
+        ]
+          .filter((entry) => entry.bindingId === assignment.bindingId)
+          .map((entry) => `${entry.id}@${entry.ageMs}ms`)
+          .join(',')
+        console.warn(
+          `[relay] invalid_host_request detail: operation=${envelope.operation} binding=${assignment.bindingId} activeForBinding=${activeForBinding} invocation=${envelope.invocationId} blocking=${blocking}`
+        )
         throw gatewayInvocationError('invalid_host_request')
       }
       const target = hostSockets.get(input.hostId)
@@ -261,11 +306,15 @@ export function mountRelayWebSocketGateways(
             hostId: input.hostId,
             providerId: input.providerId,
             envelope,
+            createdAt: Date.now(),
             resolve,
             reject,
           })
         })
         try {
+          console.log(
+            `[relay] host invocation dispatched: operation=${envelope.operation} binding=${assignment.bindingId} invocation=${envelope.invocationId} host=${input.hostId} provider=${input.providerId}`
+          )
           target.send(
             JSON.stringify({
               version: 1,
@@ -302,6 +351,7 @@ export function mountRelayWebSocketGateways(
             providerId: input.providerId,
             envelope,
             payload,
+            createdAt: Date.now(),
             fence: new GenerationStreamFence(envelope.generation),
             events: [],
             onEvent: input.onEvent,
@@ -312,6 +362,9 @@ export function mountRelayWebSocketGateways(
         }
       )
       try {
+        console.log(
+          `[relay] host invocation dispatched: operation=${envelope.operation} binding=${assignment.bindingId} invocation=${envelope.invocationId} host=${input.hostId} provider=${input.providerId}`
+        )
         target.send(
           JSON.stringify({
             version: 1,
@@ -449,6 +502,9 @@ async function handleHostFrame(
         })
       )
         throw new Error('invalid_host_registration')
+      console.log(
+        `[relay] host contribution registered: host=${principal.id} contribution=${identity} provider=${providerId} readiness=${JSON.stringify(readiness)}`
+      )
       return
     } catch {
       socket.close(1008, 'invalid_host_registration')

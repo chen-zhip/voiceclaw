@@ -221,3 +221,149 @@ The system SHALL preserve existing S2S wire configuration behavior while keeping
 
 - **WHEN** older client does not send `mode` field
 - **THEN** relay resolves `voiceMode` using the existing S2S mapping, defaulting to S2S Direct when `voiceMode` is also omitted or invalid
+
+### Requirement: Desktop STT/TTS assistant text output panel
+
+Desktop SHALL render assistant output in the effective STT/TTS Harness view as full-width, left-aligned text sections without individual chat-bubble backgrounds or borders. Sections SHALL preserve text, line breaks, message identity, chronological order, and existing supported images and attachments. User messages and tool records SHALL retain their existing presentation and timeline positions.
+
+#### Scenario: Read completed output
+
+- **WHEN** a conversation containing multiple assistant replies is displayed in the STT/TTS Harness view
+- **THEN** replies occupy the available transcript width with normal page padding, rather than the bubble width cap
+- **AND** replies remain separated by spacing or subtle separators, without merging across user messages or tool records
+
+#### Scenario: Read long text and attachments
+
+- **WHEN** an assistant reply contains paragraphs, a long unbroken token, or supported images
+- **THEN** text preserves paragraph breaks and wraps within the panel without horizontal page overflow
+- **AND** existing supported images and attachment actions remain available
+
+### Requirement: Desktop output panel streaming continuity
+
+Desktop SHALL render partial assistant output and completed assistant output using the same panel presentation. Finalization SHALL replace the transient representation with one completed representation, without duplicate text or a forced scroll reset. Existing waiting indications SHALL appear inline without a separate assistant bubble.
+
+#### Scenario: Partial output becomes a completed reply
+
+- **WHEN** partial output builds from `你好` to `你好，世界` and the completed reply `你好，世界` arrives
+- **THEN** the reader sees incremental output followed by exactly one completed `你好，世界` reply
+- **AND** the streaming indicator disappears after completion
+
+#### Scenario: Waiting for output
+
+- **WHEN** the existing conversation state reports waiting for an assistant response and no assistant text is available
+- **THEN** the waiting indication is displayed inline in the output area without an empty reply bubble
+
+#### Scenario: Interruption or session end
+
+- **WHEN** output is interrupted or a session ends
+- **THEN** existing cancellation and transient-text cleanup semantics are preserved
+- **AND** no stale streaming indicator remains and completed replies remain readable
+
+### Requirement: Desktop output panel reading interactions
+
+Desktop SHALL preserve selectable text, per-message copy and context-menu actions, optional timestamp and latency information, and the existing follow-latest scrolling behavior in the output panel.
+
+#### Scenario: User reads earlier content
+
+- **WHEN** the reader scrolls upward and further assistant output arrives
+- **THEN** the viewport remains at the reader's position and the existing jump-to-latest control becomes available
+- **AND** activating that control returns to the latest output and resumes following new output
+
+#### Scenario: Reader follows output at the bottom
+
+- **WHEN** the reader is at the bottom and an assistant reply grows
+- **THEN** the viewport follows the latest visible text
+
+#### Scenario: Copy an individual reply
+
+- **WHEN** the user selects text or opens a completed reply's context menu
+- **THEN** text remains selectable and the existing copy action copies that reply's content without neighboring replies
+- **AND** enabled timestamp and latency information remains associated with that reply
+
+### Requirement: Desktop output panel mode isolation
+
+Desktop SHALL select the presentation using the effective voice mode. Connecting and active sessions SHALL retain their startup mode, including reconnects. When idle, Desktop SHALL use the selected voice mode and refresh it on returning to the chat page. Existing history SHALL use the current presentation mode without inferring or persisting a historical mode per message. This presentation change SHALL preserve existing microphone, STT, TTS, and provider routing behavior.
+
+#### Scenario: Other voice modes
+
+- **WHEN** the effective mode is Direct, Operator, or Supervisor
+- **THEN** assistant replies and transient output retain the existing chat-bubble presentation
+
+#### Scenario: Change settings during a session
+
+- **WHEN** a STT/TTS Harness session is active or reconnecting and the saved voice mode changes
+- **THEN** the current session continues using the text output panel
+- **AND** the new selection applies to the idle view and the next session
+
+#### Scenario: Reload history while idle
+
+- **WHEN** the user opens existing history with STT/TTS Harness selected
+- **THEN** its assistant messages use the text output panel, including messages without historical mode metadata
+- **AND** switching the idle selection back to Direct restores bubble presentation without rewriting messages
+
+#### Scenario: Voice interaction remains available
+
+- **WHEN** the user speaks or submits typed input during a STT/TTS Harness session
+- **THEN** existing recognition, provider dispatch, audio playback, mute, and volume behaviors remain available alongside the output panel
+
+### Requirement: Relay-level Harness component defaults
+
+When a client selects STT/TTS Harness mode without naming its components, the system SHALL resolve the STT provider, TTS provider, and Harness from the local stack's declared configuration before failing, SHALL give client-supplied values precedence over that configuration, and SHALL keep failing with the existing required-component error when neither source provides a value.
+
+#### Scenario: Client names every component
+
+- **WHEN** `session.config` carries `mode: "stt-tts"` with `sttProvider`, `ttsProvider`, and `harness`
+- **THEN** relay constructs exactly those components and the declared configuration is not consulted
+
+#### Scenario: Client omits components but the local stack declares them
+
+- **WHEN** `session.config` carries only `mode: "stt-tts"` and `harnessBinding`, and the relay's local configuration declares an STT provider, a TTS provider, and a Harness
+- **THEN** relay constructs the declared components and the session starts as an STT/TTS Harness session
+
+#### Scenario: Client and local configuration both omit a component
+
+- **WHEN** neither `session.config` nor the relay's local configuration provides a required component
+- **THEN** relay reports the existing `sttProvider is required when mode is stt-tts` style error for that component and no session starts
+
+#### Scenario: A locally hosted provider is never implicit
+
+- **WHEN** neither the client nor the local configuration names a provider
+- **THEN** relay reports the missing component instead of selecting any provider, cloud or local, on its own
+
+#### Scenario: The locally bundled stack declares cloud defaults
+
+- **WHEN** the Desktop-owned local stack starts without an operator-declared provider
+- **THEN** it declares the default cloud providers to its Relay, and a locally hosted provider is still used only when explicitly declared
+
+### Requirement: Independent Harness selection
+
+The system SHALL treat the Harness component as an independent setting from the Harness Provider binding, and SHALL NOT derive either value from the other.
+
+#### Scenario: Harness and Provider differ
+
+- **WHEN** the selected Harness Provider binding names provider `P` while the configured Harness is `H`
+- **THEN** relay dispatches to `H` and keeps `P` only as the binding's provider identity
+
+#### Scenario: Only one of the two is configured
+
+- **WHEN** the Harness provider binding is configured but no Harness component is
+- **THEN** the session reports the missing Harness component instead of inferring one from the binding
+
+### Requirement: Fail-closed Harness startup
+
+When a selected Harness component or voice provider cannot start, the system SHALL report a visible, actionable failure for that session and SHALL NOT silently substitute another provider or Harness.
+
+#### Scenario: Selected provider runtime is unavailable
+
+- **WHEN** the session's selected provider cannot be constructed or reached
+- **THEN** relay reports the provider failure to the client and the session does not silently switch to another provider
+
+#### Scenario: Selected TTS service stops after the session starts
+
+- **WHEN** public screen output is available but the selected TTS service cannot synthesize its speech
+- **THEN** the client keeps the public text readable, shows an actionable speech failure, and does not substitute another TTS provider
+
+#### Scenario: Selected Harness is unavailable
+
+- **WHEN** the session's selected Harness cannot accept the Turn
+- **THEN** relay reports the Harness failure and offers its existing recovery choices instead of falling back to another pipeline

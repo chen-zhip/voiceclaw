@@ -1221,7 +1221,7 @@ export class RelaySession {
     const runtimeMode = effectiveVoiceMode(config)
     const backend = resolveAgentBackend(config.agentBackend)
     log(
-      `[session:${this.id}] Auth passed, creating ${config.provider} adapter (model=${config.model || 'default'}, voiceMode=${requestedMode}${runtimeMode !== requestedMode ? ` →${runtimeMode}` : ''}, agentBackend=${backend})`
+      `[session:${this.id}] Auth passed, creating ${config.provider} adapter (pipeline=${resolveSessionMode(config.mode)}, model=${config.model || 'default'}, voiceMode=${requestedMode}${runtimeMode !== requestedMode ? ` →${runtimeMode}` : ''}, agentBackend=${backend})`
     )
     if (requestedMode === 'supervisor') {
       noteSupervisorSelected(this.id, backend)

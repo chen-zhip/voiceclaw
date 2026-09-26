@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { TabBar, type TabId } from './components/TabBar'
+import { DesktopNavigation, type DesktopDestination } from './components/DesktopNavigation'
 import { UpdateBanner } from './components/UpdateBanner'
 import { ChatPage } from './pages/ChatPage'
 import { HistoryPage } from './pages/HistoryPage'
@@ -19,17 +19,23 @@ const ONBOARDING_STEP_IDS: WizardStepId[] = [
 ]
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<TabId>('chat')
+  const [activeDestination, setActiveDestination] = useState<DesktopDestination>('chat')
+  const [newConversationRequestId, setNewConversationRequestId] = useState(0)
   const [bootState, setBootState] = useState<OnboardingState | null>(null)
   const [showWizard, setShowWizard] = useState(false)
   const [bootChecked, setBootChecked] = useState(false)
 
   const onboardingFlag = parseOnboardingFlag()
+  const interfacePreview = parseInterfacePreview()
 
   // Initialize theme system (applies dark/light class to html)
   useTheme()
 
-  const navigateToChat = useCallback(() => setActiveTab('chat'), [])
+  const navigateToChat = useCallback(() => setActiveDestination('chat'), [])
+  const startNewChat = useCallback(() => {
+    setActiveDestination('chat')
+    setNewConversationRequestId((requestId) => requestId + 1)
+  }, [])
 
   // First-mount: ask main whether onboarding is complete. The wizard
   // shows iff completedAt is null. The ?onboarding=1 URL flag (used by
@@ -64,19 +70,19 @@ export function App() {
       switch (e.key) {
         case ',':
           e.preventDefault()
-          setActiveTab('settings')
+          setActiveDestination('settings')
           break
         case '1':
           e.preventDefault()
-          setActiveTab('chat')
+          setActiveDestination('chat')
           break
         case '2':
           e.preventDefault()
-          setActiveTab('history')
+          setActiveDestination('history')
           break
         case '3':
           e.preventDefault()
-          setActiveTab('settings')
+          setActiveDestination('settings')
           break
       }
     }
@@ -103,15 +109,13 @@ export function App() {
   // Hold the splash blank for a single tick while we decide. Avoids
   // briefly flashing the main app then swapping to the wizard.
   if (!bootChecked) {
-    return <div className="h-screen w-screen bg-background" />
+    return <div className="bg-background h-screen w-screen" />
   }
 
   if (showWizard) {
     return (
       <OnboardingWizard
-        initialState={
-          bootState ?? { currentStep: 'welcome', payload: {}, completedAt: null }
-        }
+        initialState={bootState ?? { currentStep: 'welcome', payload: {}, completedAt: null }}
         onComplete={() => setShowWizard(false)}
       />
     )
@@ -119,23 +123,62 @@ export function App() {
 
   return (
     <ConversationProvider>
-      <div className="h-screen flex flex-col bg-background text-foreground vc-window-surface">
-        <UpdateBanner />
-        <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
-        <main className="flex-1 flex flex-col overflow-hidden relative">
-          <div className={`flex-1 flex flex-col overflow-hidden ${activeTab !== 'chat' ? 'hidden' : ''}`}>
-            <ChatPage onNavigateToSettings={() => setActiveTab('settings')} />
-          </div>
-          <div className={`flex-1 flex flex-col overflow-hidden ${activeTab !== 'history' ? 'hidden' : ''}`}>
-            <HistoryPage isVisible={activeTab === 'history'} onNavigateToChat={navigateToChat} />
-          </div>
-          <div className={`flex-1 flex flex-col overflow-hidden ${activeTab !== 'settings' ? 'hidden' : ''}`}>
-            <SettingsPage />
-          </div>
-        </main>
+      <div className="text-foreground flex h-screen flex-col bg-[var(--shell-workspace)]">
+        <UpdateBanner preview={interfacePreview === 'update'} />
+        <div className="flex min-h-0 flex-1">
+          <DesktopNavigation
+            activeDestination={activeDestination}
+            onDestinationChange={setActiveDestination}
+            onNewChat={startNewChat}
+          />
+          <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--shell-workspace)]">
+            <section
+              role="region"
+              aria-label="Chat view"
+              hidden={activeDestination !== 'chat'}
+              className="min-h-0 flex-1 flex-col overflow-hidden data-[visible=true]:flex"
+              data-visible={activeDestination === 'chat'}>
+              <ChatPage
+                isActive={activeDestination === 'chat'}
+                newConversationRequestId={newConversationRequestId}
+                previewVoiceState={
+                  interfacePreview === 'connecting' || interfacePreview === 'active'
+                    ? interfacePreview
+                    : undefined
+                }
+                onNavigateToSettings={() => setActiveDestination('settings')}
+              />
+            </section>
+            <section
+              role="region"
+              aria-label="History view"
+              hidden={activeDestination !== 'history'}
+              className="min-h-0 flex-1 flex-col overflow-hidden data-[visible=true]:flex"
+              data-visible={activeDestination === 'history'}>
+              <HistoryPage
+                isVisible={activeDestination === 'history'}
+                onNavigateToChat={navigateToChat}
+              />
+            </section>
+            <section
+              role="region"
+              aria-label="Settings view"
+              hidden={activeDestination !== 'settings'}
+              className="min-h-0 flex-1 flex-col overflow-hidden data-[visible=true]:flex"
+              data-visible={activeDestination === 'settings'}>
+              <SettingsPage />
+            </section>
+          </main>
+        </div>
       </div>
     </ConversationProvider>
   )
+}
+
+function parseInterfacePreview() {
+  if (!import.meta.env.DEV) return null
+  const preview = new URLSearchParams(window.location.search).get('interface-preview')
+  return preview === 'connecting' || preview === 'active' || preview === 'update' ? preview : null
 }
 
 // ---------------------------------------------------------------------------

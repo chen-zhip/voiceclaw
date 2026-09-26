@@ -4,8 +4,8 @@
   "private": true,
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "tsx scripts/patch-dev-electron-name.ts && electron-vite dev",
-    "build": "electron-vite build",
+    "dev": "tsx scripts/patch-dev-electron-name.ts && electron-vite dev -c electron-vite.config.ts",
+    "build": "electron-vite build -c electron-vite.config.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "postinstall": "electron-rebuild -f -w better-sqlite3 --module-dir .",
@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@voiceclaw/contracts": "workspace:*",
+    "ajv": "^8.17.1",
     "archiver": "^7.0.1",
     "better-sqlite3": "^12.9.0",
     "electron-updater": "^6.6.2",
@@ -34,6 +35,8 @@
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
     "@tailwindcss/postcss": "^4.2.4",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.0",
     "@types/archiver": "^7.0.0",
     "@types/better-sqlite3": "^7.6.12",
     "@types/qrcode": "^1.5.5",
@@ -44,6 +47,7 @@
     "electron": "^41.3.0",
     "electron-builder": "^26.8.1",
     "electron-vite": "^5.0.0",
+    "jsdom": "^26.1.0",
     "lucide-react": "^1.11.0",
     "postcss": "^8.5.3",
     "sharp": "^0.34.5",

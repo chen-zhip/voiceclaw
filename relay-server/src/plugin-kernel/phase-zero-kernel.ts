@@ -37,25 +37,43 @@ interface LoadedEntry {
   loaded: LoadedContribution
 }
 
+/**
+ * Sends one `harness.execution` invocation to the Desktop Host that owns the
+ * binding. The Relay's Host gateway implements it; without it the Kernel can
+ * only dispatch to a Contribution loaded in-process.
+ */
+export interface HostTransport {
+  invoke(input: {
+    hostId: string
+    providerId: string
+    envelope: KernelInvocationEnvelope
+    payload: Record<string, unknown>
+    onEvent(event: HarnessExecutionEvent): void
+  }): Promise<{ events: HarnessExecutionEvent[] } | { result: Record<string, unknown> }>
+}
+
 export class PhaseZeroKernel {
   readonly #entries: Map<string, LoadedEntry>
   readonly #selectedProviders: Record<string, SelectedProviderRef>
   readonly #grants: CapabilityGrantEvaluator
   readonly #store: ControlStateStore
   readonly #graph: ReturnType<typeof createEffectivePluginGraph>
+  readonly #hostTransport: HostTransport | undefined
 
   private constructor(
     entries: Map<string, LoadedEntry>,
     selectedProviders: Record<string, SelectedProviderRef>,
     grants: CapabilityGrantEvaluator,
     store: ControlStateStore,
-    graph: ReturnType<typeof createEffectivePluginGraph>
+    graph: ReturnType<typeof createEffectivePluginGraph>,
+    hostTransport?: HostTransport
   ) {
     this.#entries = entries
     this.#selectedProviders = selectedProviders
     this.#grants = grants
     this.#store = store
     this.#graph = graph
+    this.#hostTransport = hostTransport
   }
 
   static async bootstrap(options: {
@@ -63,6 +81,8 @@ export class PhaseZeroKernel {
     developmentAllowlistedRoots: string[]
     voiceclawVersion: string
     controlStatePath: string
+    controlState?: ControlStateStore
+    hostTransport?: HostTransport
     selectedProviders: Record<string, SelectedProviderRef>
     configurations: Record<string, unknown>
     grants: CapabilityGrantRecord[]
@@ -75,12 +95,29 @@ export class PhaseZeroKernel {
   }): Promise<PhaseZeroKernel> {
     const discovery = await discoverPluginPackages(options)
     if (discovery.packages.length === 0) {
-      throw new Error('Phase 0 Profile has no accepted plugin package')
+      const searched = [...options.shippedRoots, ...options.developmentAllowlistedRoots]
+      const rejected = discovery.rejections
+        .map(
+          (rejection) =>
+            `${rejection.root} -> ${rejection.errors
+              .map((error) => `${error.path}:${error.code}`)
+              .join(',')}`
+        )
+        .join('; ')
+      throw new Error(
+        `Phase 0 Profile has no accepted plugin package (searched: ${
+          searched.join(' | ') || '<none>'
+        }${rejected ? `; rejected: ${rejected}` : ''})`
+      )
     }
 
-    const store = await ControlStateStore.open(options.controlStatePath, {
-      requester: { kind: 'relay-authority', id: 'phase-zero-kernel' },
-    })
+    // A second store instance would freeze its own snapshot at bootstrap and
+    // then disagree with later authority commits (assignment generations).
+    const store =
+      options.controlState ??
+      (await ControlStateStore.open(options.controlStatePath, {
+        requester: { kind: 'relay-authority', id: 'phase-zero-kernel' },
+      }))
     if (options.grants.length > 0 || options.assignments.length > 0) {
       await store.commit((state) => ({
         ...state,
@@ -207,7 +244,8 @@ export class PhaseZeroKernel {
       structuredClone(options.selectedProviders),
       grants,
       store,
-      graph
+      graph,
+      options.hostTransport
     )
   }
 
@@ -273,11 +311,6 @@ export class PhaseZeroKernel {
         .assignments.find((candidate) => candidate.bindingId === bindingId)
       if (
         !assignment ||
-        assignment.hostId !==
-          contributionKey(
-            envelope.selectedContribution.packageId,
-            envelope.selectedContribution.contributionId
-          ) ||
         assignment.generation !== envelope.generation ||
         (typeof request.data.payload.generation === 'number' &&
           assignment.generation !== request.data.payload.generation)
@@ -301,7 +334,7 @@ export class PhaseZeroKernel {
             : {}),
         }).authorized,
       dispatch: async () => {
-        hostResult = await entry.loaded.invoke({ envelope, payload })
+        hostResult = await this.#dispatchToHost(entry, envelope, request.data.payload, bindingId)
       },
     })
 
@@ -325,9 +358,41 @@ export class PhaseZeroKernel {
         if (!output.accepted) throw new Error(output.code)
       }
       const accepted = fence.accept(event)
-      if (!accepted.accepted) throw new Error(accepted.code)
+      if (!accepted.accepted) {
+        console.warn(
+          `[relay] stream fence rejected event: code=${accepted.code} envelopeGeneration=${envelope.generation} eventGeneration=${String(
+            (event as { generation?: unknown }).generation
+          )} sequence=${String((event as { sequence?: unknown }).sequence)} kind=${event.kind}`
+        )
+        throw new Error(accepted.code)
+      }
     }
     return { events: stream.data }
+  }
+
+  async #dispatchToHost(
+    entry: LoadedEntry,
+    envelope: KernelInvocationEnvelope,
+    payload: Record<string, unknown>,
+    bindingId: unknown
+  ): Promise<unknown> {
+    if (!this.#hostTransport) return entry.loaded.invoke({ envelope, payload })
+
+    const assignment =
+      typeof bindingId === 'string'
+        ? this.#store.read().assignments.find((candidate) => candidate.bindingId === bindingId)
+        : undefined
+    if (!assignment?.providerId) {
+      throw new Error('No Desktop Host is connected for this Harness binding')
+    }
+    const bridged = await this.#hostTransport.invoke({
+      hostId: assignment.hostId,
+      providerId: assignment.providerId,
+      envelope,
+      payload,
+      onEvent: () => undefined,
+    })
+    return 'events' in bridged ? bridged.events : bridged.result
   }
 
   async disposeContribution(identity: SelectedProviderRef): Promise<void> {

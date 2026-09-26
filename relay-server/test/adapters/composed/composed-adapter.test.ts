@@ -48,6 +48,83 @@ describe('ComposedAdapter', () => {
     ])
   })
 
+  it('tells the STT provider which sample rate the client sold it', async () => {
+    const calls: string[] = []
+    const stt = new FakeSTT(calls)
+    const tts = new FakeTTS(calls)
+    const adapter = new ComposedAdapter(
+      stt,
+      new FakeHarness(calls),
+      tts,
+      new OutputRouter({ tts, sendToClient: () => {} })
+    )
+
+    // The Desktop captures and streams PCM at 24 kHz; a provider that assumes
+    // 16 kHz would transcribe a 1.5x slowed-down signal.
+    await adapter.connect(
+      { ...sessionConfig(), audioSampleRate: 24_000, sttConfig: { model: 'nova-3' } },
+      () => {}
+    )
+    expect(stt.configs.at(-1)).toMatchObject({ model: 'nova-3', sampleRate: 24_000 })
+
+    // An explicit provider setting still wins over the session-wide rate.
+    const explicitCalls: string[] = []
+    const explicitStt = new FakeSTT(explicitCalls)
+    const explicitTts = new FakeTTS(explicitCalls)
+    const explicit = new ComposedAdapter(
+      explicitStt,
+      new FakeHarness(explicitCalls),
+      explicitTts,
+      new OutputRouter({ tts: explicitTts, sendToClient: () => {} })
+    )
+    await explicit.connect(
+      {
+        ...sessionConfig(),
+        audioSampleRate: 24_000,
+        sttConfig: { model: 'nova-3', sampleRate: 8_000 },
+      },
+      () => {}
+    )
+    expect(explicitStt.configs.at(-1)).toMatchObject({ sampleRate: 8_000 })
+  })
+
+  it('tells the TTS provider which sample rate the client will play back', async () => {
+    const calls: string[] = []
+    const tts = new FakeTTS(calls)
+    const adapter = new ComposedAdapter(
+      new FakeSTT(calls),
+      new FakeHarness(calls),
+      tts,
+      new OutputRouter({ tts, sendToClient: () => {} })
+    )
+
+    // The Desktop plays `audio.delta` PCM in its 24 kHz context, so a provider
+    // that returns its own default rate would sound slowed down.
+    await adapter.connect(
+      { ...sessionConfig(), audioSampleRate: 24_000, ttsConfig: { voice: 'v' } },
+      () => {}
+    )
+    expect(tts.configs.at(-1)).toMatchObject({ voice: 'v', sampleRate: 24_000 })
+
+    const explicitCalls: string[] = []
+    const explicitTts = new FakeTTS(explicitCalls)
+    const explicit = new ComposedAdapter(
+      new FakeSTT(explicitCalls),
+      new FakeHarness(explicitCalls),
+      explicitTts,
+      new OutputRouter({ tts: explicitTts, sendToClient: () => {} })
+    )
+    await explicit.connect(
+      {
+        ...sessionConfig(),
+        audioSampleRate: 24_000,
+        ttsConfig: { voice: 'v', sampleRate: 44_100 },
+      },
+      () => {}
+    )
+    expect(explicitTts.configs.at(-1)).toMatchObject({ sampleRate: 44_100 })
+  })
+
   it('routes streaming recognition', async () => {
     const calls: string[] = []
     const stt = new FakeSTT(calls)
@@ -153,6 +230,36 @@ describe('ComposedAdapter', () => {
     expect(stt.commits).toBe(2)
   })
 
+  it('waits as long as the recognition provider declares', async () => {
+    vi.useFakeTimers()
+    const calls: string[] = []
+    const stt = new FakeSTT(calls)
+    // A locally hosted recognizer loads models per utterance, so the pipeline
+    // must not cut it off at the streaming provider's 10 second budget.
+    stt.finalTranscriptDeadlineMs = 60_000
+    const tts = new FakeTTS(calls)
+    const events: RelayEvent[] = []
+    const adapter: ProviderAdapter = new ComposedAdapter(
+      stt,
+      new FakeHarness(calls),
+      tts,
+      new OutputRouter({ tts, sendToClient: (event) => events.push(event) })
+    )
+    await adapter.connect(sessionConfig(), (event) => events.push(event))
+
+    adapter.sendAudio('cHJlc2VydmVk')
+    adapter.commitAudio()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(events.filter((event) => event.type === 'error')).toEqual([])
+
+    await vi.advanceTimersByTimeAsync(50_000)
+    expect(events).toContainEqual({
+      type: 'error',
+      code: 504,
+      message: expect.stringMatching(/STT.*retry/i),
+    })
+  })
+
   it('degrades unavailable Harness features', async () => {
     const failedCalls: string[] = []
     const failedSTT = new FakeSTT(failedCalls)
@@ -256,14 +363,17 @@ describe('ComposedAdapter', () => {
 
 class FakeSTT implements STTProvider {
   readonly audio: string[] = []
+  readonly configs: STTConfig[] = []
   commits = 0
+  finalTranscriptDeadlineMs: number | undefined
   private partialTranscript: TranscriptCallback = () => {}
   private finalTranscript: TranscriptCallback = () => {}
   private error: (message: string) => void = () => {}
 
   constructor(private readonly calls: string[]) {}
 
-  async connect(_config: STTConfig): Promise<void> {
+  async connect(config: STTConfig): Promise<void> {
+    this.configs.push(structuredClone(config))
     this.calls.push('stt.connect')
   }
 
@@ -341,9 +451,11 @@ class FakeHarness implements HarnessAdapter {
 
 class FakeTTS implements TTSProvider {
   readonly synthesized: string[] = []
+  readonly configs: TTSConfig[] = []
   constructor(private readonly calls: string[]) {}
 
-  async connect(_config: TTSConfig): Promise<void> {
+  async connect(config: TTSConfig): Promise<void> {
+    this.configs.push(structuredClone(config))
     this.calls.push('tts.connect')
   }
 

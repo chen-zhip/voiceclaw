@@ -40,15 +40,31 @@ export async function discoverPluginPackages(
   const rejections: RejectedPluginPackage[] = []
   const acceptedByManifestId = new Map<string, DiscoveredPluginPackage>()
   const duplicateManifestIds = new Set<string>()
-  const allowedRoots = [
-    ...new Set([...options.shippedRoots, ...options.developmentAllowlistedRoots]),
-  ]
+  // A shipped root is part of the build's own configuration, so failing to read
+  // one is a defect worth reporting. A development-allowlisted root is an
+  // optional operator path and may legitimately be absent.
+  const allowedRoots = new Map<string, boolean>()
+  for (const root of options.developmentAllowlistedRoots) {
+    if (!allowedRoots.has(root)) allowedRoots.set(root, false)
+  }
+  for (const root of options.shippedRoots) allowedRoots.set(root, true)
 
-  for (const allowedRoot of allowedRoots) {
+  for (const [allowedRoot, required] of allowedRoots) {
     let entries
     try {
       entries = await readdir(allowedRoot, { withFileTypes: true })
-    } catch {
+    } catch (error) {
+      if (required) {
+        rejections.push({
+          root: allowedRoot,
+          errors: [
+            errorResult(
+              'root_unreadable',
+              `Plugin root could not be read: ${(error as NodeJS.ErrnoException).code ?? String(error)}`
+            ),
+          ],
+        })
+      }
       continue
     }
 

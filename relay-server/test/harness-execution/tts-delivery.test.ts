@@ -1,6 +1,8 @@
 import type { TTSProvider } from '../../src/tts/interface.js'
 import { describe, expect, it, vi } from 'vitest'
 import { HarnessStreamRouter } from '../../src/harness-execution/stream-routing.js'
+import { HarnessSpeechDelivery } from '../../src/harness-execution/tts-delivery.js'
+import { createSttTtsDebugRecorder } from '../../src/stt-tts-debug.js'
 
 const identity = {
   invocationId: 'invocation-1',
@@ -12,6 +14,27 @@ const identity = {
 }
 
 describe('Harness TTS delivery', () => {
+  it('tells the client when configured speech synthesis is unavailable', async () => {
+    const sent: unknown[] = []
+    const delivery = new HarnessSpeechDelivery({
+      tts: {
+        async *synthesize() {
+          throw new Error('local TTS service is unreachable')
+        },
+      } as TTSProvider,
+      sendToClient: (event) => sent.push(event),
+    })
+
+    await delivery.write('Public answer.')
+
+    expect(sent).toEqual([
+      {
+        type: 'harness.tts-failed',
+        message: 'Speech playback unavailable. Check the configured TTS service, then retry.',
+      },
+    ])
+  })
+
   it('streams complete bounded sentence batches and preserves emitted audio', async () => {
     const deliveryModule = await import('../../src/harness-execution/tts-delivery.js').catch(
       () => ({})
@@ -86,7 +109,13 @@ describe('Harness TTS delivery', () => {
     })
     await Promise.all([fallibleDelivery.write('First.'), fallibleDelivery.write('Second.')])
     expect(maxActive).toBe(1)
-    expect(preservedAudio).toEqual([{ type: 'audio.delta', data: 'audio:First.' }])
+    expect(preservedAudio).toEqual([
+      { type: 'audio.delta', data: 'audio:First.' },
+      {
+        type: 'harness.tts-failed',
+        message: 'Speech playback unavailable. Check the configured TTS service, then retry.',
+      },
+    ])
     expect(warnings).toEqual([expect.stringContaining('later synthesis failed')])
 
     const routedBatches: string[] = []
@@ -105,7 +134,86 @@ describe('Harness TTS delivery', () => {
     await router.route(event(2, 'terminal', { outcome: 'completed' }))
     expect(routedBatches).toEqual(['Trailing route'])
   })
+
+  it('reports complete synthesis text and aggregate delivery metadata', async () => {
+    const lines: string[] = []
+    const recorder = createSttTtsDebugRecorder({
+      activation: 'true',
+      sink: (line) => lines.push(line),
+    })
+    const delivery = new HarnessSpeechDelivery({
+      tts: {
+        async *synthesize() {
+          yield { data: Buffer.from([1, 2]).toString('base64') }
+          yield { data: Buffer.from([3]).toString('base64') }
+        },
+      } as TTSProvider,
+      sendToClient: () => {},
+      debugRecorder: recorder,
+      debugContext: () => ({
+        sessionId: 'session-1',
+        turnId: 'turn-1',
+        attemptId: 'attempt-1',
+        providerId: 'gpt-sovits-tts',
+      }),
+    })
+
+    await delivery.write('完整 synthesis text.')
+    await delivery.finish()
+
+    expect(lines.map(parseRecord)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: 'tts.synthesis.start',
+          sessionId: 'session-1',
+          turnId: 'turn-1',
+          providerId: 'gpt-sovits-tts',
+          synthesisText: '完整 synthesis text.',
+          synthesisCharacters: 18,
+        }),
+        expect.objectContaining({
+          event: 'tts.synthesis.complete',
+          chunkCount: 2,
+          audioBytes: 3,
+          durationMs: expect.any(Number),
+        }),
+      ])
+    )
+
+    const failed = new HarnessSpeechDelivery({
+      tts: {
+        async *synthesize() {
+          throw new Error('TTS offline')
+        },
+      } as TTSProvider,
+      sendToClient: () => {},
+      debugRecorder: recorder,
+      debugContext: () => ({ sessionId: 'session-1', providerId: 'gpt-sovits-tts' }),
+    })
+    await failed.write('Failure.')
+    expect(lines.map(parseRecord)).toContainEqual(
+      expect.objectContaining({ event: 'tts.synthesis.failed', error: 'TTS offline' })
+    )
+
+    const cancelled = new HarnessSpeechDelivery({
+      tts: provider([]),
+      sendToClient: () => {},
+      debugRecorder: recorder,
+      debugContext: () => ({ sessionId: 'session-1', turnId: 'turn-2' }),
+    })
+    await cancelled.write('unfinished')
+    cancelled.abort()
+    expect(lines.map(parseRecord)).toContainEqual(
+      expect.objectContaining({ event: 'tts.synthesis.cancelled', turnId: 'turn-2' })
+    )
+
+    expect(lines.join('\n')).not.toContain(Buffer.from([1, 2]).toString('base64'))
+  })
 })
+
+function parseRecord(line: string): Record<string, unknown> {
+  return JSON.parse(line.slice('[stt-tts-debug] '.length))
+}
 
 function provider(batches: string[]): TTSProvider {
   return {

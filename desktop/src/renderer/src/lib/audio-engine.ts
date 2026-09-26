@@ -27,21 +27,14 @@ export class AudioEngine {
   private processor: ScriptProcessorNode | null = null
   private captureBuffer = new Float32Array(0)
 
-  async startCapture(
-    onAudioData: (base64: string) => void,
-    deviceId?: string,
-  ) {
-    this.audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE })
+  async startPlayback() {
+    const audioCtx = this.ensureAudioGraph()
+    if (audioCtx.state === 'suspended') await audioCtx.resume()
+  }
 
-    this.gainNode = this.audioCtx.createGain()
-    this.gainNode.connect(this.audioCtx.destination)
-    this.applyOutputGain()
-
-    // Tap the gain post-volume so the level meter reflects what the user hears.
-    this.outputAnalyser = this.audioCtx.createAnalyser()
-    this.outputAnalyser.fftSize = 512
-    this.outputAnalyserBuf = new Float32Array(this.outputAnalyser.fftSize)
-    this.gainNode.connect(this.outputAnalyser)
+  async startCapture(onAudioData: (base64: string) => void, deviceId?: string) {
+    const audioCtx = this.ensureAudioGraph()
+    if (audioCtx.state === 'suspended') await audioCtx.resume()
 
     const constraints: MediaStreamConstraints = {
       audio: {
@@ -54,9 +47,9 @@ export class AudioEngine {
     }
 
     this.micStream = await navigator.mediaDevices.getUserMedia(constraints)
-    this.source = this.audioCtx.createMediaStreamSource(this.micStream)
+    this.source = audioCtx.createMediaStreamSource(this.micStream)
 
-    const useWorklet = await tryRegisterWorklet(this.audioCtx)
+    const useWorklet = await tryRegisterWorklet(audioCtx)
 
     if (useWorklet) {
       this.startWorkletCapture(onAudioData)
@@ -109,7 +102,11 @@ export class AudioEngine {
   stopPlayback() {
     this.nextStartTime = 0
     for (const source of this.liveSources) {
-      try { source.stop() } catch { /* already stopped */ }
+      try {
+        source.stop()
+      } catch {
+        /* already stopped */
+      }
     }
     this.liveSources.clear()
   }
@@ -135,7 +132,7 @@ export class AudioEngine {
   async setOutputDevice(deviceId: string) {
     if (this.audioCtx && 'setSinkId' in this.audioCtx) {
       await (this.audioCtx as unknown as { setSinkId: (id: string) => Promise<void> }).setSinkId(
-        deviceId,
+        deviceId
       )
     }
   }
@@ -228,6 +225,22 @@ export class AudioEngine {
     if (!this.gainNode) return
     this.gainNode.gain.value = this.outputMuted ? 0 : this.outputVolume
   }
+
+  private ensureAudioGraph(): AudioContext {
+    if (this.audioCtx && this.gainNode) return this.audioCtx
+
+    this.audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE })
+    this.gainNode = this.audioCtx.createGain()
+    this.gainNode.connect(this.audioCtx.destination)
+    this.applyOutputGain()
+
+    // Tap the gain post-volume so the level meter reflects what the user hears.
+    this.outputAnalyser = this.audioCtx.createAnalyser()
+    this.outputAnalyser.fftSize = 512
+    this.outputAnalyserBuf = new Float32Array(this.outputAnalyser.fftSize)
+    this.gainNode.connect(this.outputAnalyser)
+    return this.audioCtx
+  }
 }
 
 export async function enumerateAudioDevices(): Promise<AudioDevice[]> {
@@ -236,7 +249,9 @@ export async function enumerateAudioDevices(): Promise<AudioDevice[]> {
     .filter((d) => d.kind === 'audioinput' || d.kind === 'audiooutput')
     .map((d) => ({
       deviceId: d.deviceId,
-      label: d.label || `${d.kind === 'audioinput' ? 'Microphone' : 'Speaker'} ${d.deviceId.slice(0, 8)}`,
+      label:
+        d.label ||
+        `${d.kind === 'audioinput' ? 'Microphone' : 'Speaker'} ${d.deviceId.slice(0, 8)}`,
       kind: d.kind as 'audioinput' | 'audiooutput',
     }))
 }

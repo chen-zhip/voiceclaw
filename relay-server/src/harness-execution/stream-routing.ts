@@ -135,6 +135,7 @@ function isTerminalOutcome(payload: Record<string, unknown>): boolean {
     payload.outcome === 'completed' ||
     payload.outcome === 'failed' ||
     payload.outcome === 'cancelled' ||
+    payload.outcome === 'unknown' ||
     payload.outcome === 'outcome-unknown'
   )
 }

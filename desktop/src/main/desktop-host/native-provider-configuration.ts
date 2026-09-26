@@ -14,6 +14,7 @@ export interface DesktopSettingsDatabase {
   prepare(sql: string): {
     get(key: string): unknown
     run(key: string, value: string): unknown
+    all?(pattern: string): unknown
   }
 }
 
@@ -33,6 +34,13 @@ export class DesktopSettingsStorage {
         'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
       )
       .run(key, value)
+  }
+
+  async list(prefix: string): Promise<string[]> {
+    const statement = this.database.prepare('SELECT key FROM settings WHERE key LIKE ?')
+    if (typeof statement.all !== 'function') return []
+    const rows = statement.all(`${prefix}%`) as Array<{ key?: unknown }>
+    return rows.map((row) => row?.key).filter((key): key is string => typeof key === 'string')
   }
 }
 

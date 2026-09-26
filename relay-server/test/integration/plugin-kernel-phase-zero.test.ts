@@ -187,7 +187,7 @@ describe('deterministic Phase 0 invocation', () => {
       assignments: [
         {
           bindingId: 'binding-1',
-          hostId: 'voiceclaw-fixture:fixture-host',
+          hostId: 'local-host-1',
           generation: 1,
         },
       ],

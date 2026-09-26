@@ -204,13 +204,14 @@ describe('harness.execution Host projection', () => {
 
       const cancelFrame = nextSocketFrame(socket)
       await expect(
-        mounted.hostControl.cancel({
+        mounted.hostControl.invoke({
           hostId: 'host-1',
           providerId: 'codex',
           envelope: { ...envelope('turn.cancel', 'valid-cancel'), generation: 1 },
           payload: cancelPayload,
+          onEvent: () => undefined,
         })
-      ).resolves.toEqual({ accepted: true })
+      ).resolves.toEqual({ result: { accepted: true } })
       await expect(cancelFrame).resolves.toMatchObject({
         version: 1,
         type: 'host.invocation.cancel',

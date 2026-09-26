@@ -31,13 +31,11 @@ export function createMainWindow(options: { isDev: boolean; rendererUrl?: string
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    minWidth: 800,
+    minWidth: 560,
     minHeight: 600,
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 16 },
-    // Brand paper. Paints behind any renderer transparency (e.g. tailwind v4
-    // slash-opacity utilities like bg-card/90, which v3 silently ignored).
-    backgroundColor: '#f1e8da',
+    backgroundColor: '#181818',
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

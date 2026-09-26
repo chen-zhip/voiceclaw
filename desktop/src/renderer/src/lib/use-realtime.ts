@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AudioEngine } from './audio-engine'
+import { AudioEngine, SAMPLE_RATE } from './audio-engine'
 import type { ToolCallProgressDelta } from './tool-call-store'
 import { STTTTSHarnessAudioBridge } from './stt-tts-harness-audio'
 import type { HarnessAudioTransport } from './stt-tts-harness-audio'
@@ -55,6 +55,7 @@ export interface RealtimeConfig {
   // Explicit STT/TTS Harness entry. `mode` selects the Conversation Pipeline;
   // the binding must match the Relay's Active Host Assignment.
   mode?: 's2s' | 'stt-tts'
+  inputMode?: 'microphone' | 'text'
   sttProvider?: string
   ttsProvider?: string
   harness?: string
@@ -63,6 +64,31 @@ export interface RealtimeConfig {
     providerId: string
     workspaceBindingId: string
     generation?: number
+  }
+}
+
+export function buildRealtimeSessionConfig(config: RealtimeConfig): Record<string, unknown> {
+  return {
+    type: 'session.config',
+    provider: getProviderForRealtimeModel(config.model),
+    voice: config.voice,
+    model: config.model,
+    brainAgent: config.brainAgent,
+    apiKey: config.apiKey,
+    tavilyApiKey: config.tavilyApiKey,
+    sessionKey: config.sessionKey,
+    deviceContext: config.deviceContext,
+    instructionsOverride: config.instructionsOverride,
+    conversationHistory: config.conversationHistory,
+    voiceMode: config.voiceMode,
+    agentBackend: config.agentBackend,
+    mode: config.mode,
+    inputMode: config.inputMode,
+    sttProvider: config.sttProvider,
+    ttsProvider: config.ttsProvider,
+    harness: config.harness,
+    harnessBinding: config.harnessBinding,
+    audioSampleRate: SAMPLE_RATE,
   }
 }
 
@@ -121,6 +147,10 @@ export interface RealtimeControls {
   isConnected: boolean
   isReconnecting: boolean
   sessionId: string | null
+}
+
+export function shouldCaptureMicrophone(config: Pick<RealtimeConfig, 'inputMode'>): boolean {
+  return config.inputMode !== 'text'
 }
 
 const MAX_RECONNECT_ATTEMPTS = 3
@@ -364,41 +394,24 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
 
       ws.onopen = async () => {
         console.log('[useRealtime] WebSocket connected, sending session.config')
-        const provider = getProviderForRealtimeModel(config.model)
-        ws.send(
-          JSON.stringify({
-            type: 'session.config',
-            provider,
-            voice: config.voice,
-            model: config.model,
-            brainAgent: config.brainAgent,
-            apiKey: config.apiKey,
-            tavilyApiKey: config.tavilyApiKey,
-            sessionKey: config.sessionKey,
-            deviceContext: config.deviceContext,
-            instructionsOverride: config.instructionsOverride,
-            conversationHistory: config.conversationHistory,
-            voiceMode: config.voiceMode,
-            agentBackend: config.agentBackend,
-            mode: config.mode,
-            sttProvider: config.sttProvider,
-            ttsProvider: config.ttsProvider,
-            harness: config.harness,
-            harnessBinding: config.harnessBinding,
-          })
-        )
+        ws.send(JSON.stringify(buildRealtimeSessionConfig(config)))
 
-        // Start mic capture — audio data flows to WebSocket
+        // Initialize output playback, then capture microphone input only for
+        // microphone sessions.
         try {
-          await engine.startCapture((base64) => {
-            if (ws.readyState === WebSocket.OPEN) {
-              if (config.mode === 'stt-tts') {
-                harnessBridgeRef.current?.appendMicrophone(base64)
-              } else {
-                ws.send(JSON.stringify({ type: 'audio.append', data: base64 }))
+          await engine.startPlayback()
+
+          if (shouldCaptureMicrophone(config)) {
+            await engine.startCapture((base64) => {
+              if (ws.readyState === WebSocket.OPEN) {
+                if (config.mode === 'stt-tts') {
+                  harnessBridgeRef.current?.appendMicrophone(base64)
+                } else {
+                  ws.send(JSON.stringify({ type: 'audio.append', data: base64 }))
+                }
               }
-            }
-          }, config.inputDeviceId)
+            }, config.inputDeviceId)
+          }
 
           if (config.outputDeviceId) {
             await engine.setOutputDevice(config.outputDeviceId)
@@ -509,6 +522,11 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
     return true
   }, [])
 
+  const cancelHarnessTurn = useCallback(() => {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return
+    void harnessBridgeRef.current?.cancel('user_request')
+  }, [])
+
   const getInputLevel = useCallback(() => {
     return engineRef.current?.getInputLevel() ?? 0
   }, [])
@@ -525,6 +543,7 @@ export function useRealtime(callbacks: RealtimeCallbacks): RealtimeControls {
     setOutputMuted,
     sendFrame,
     sendUserText,
+    cancelHarnessTurn,
     getInputLevel,
     getOutputLevel,
     isConnected,

@@ -21,6 +21,7 @@ export interface DesktopHostContribution {
   invoke(input: {
     envelope: KernelInvocationEnvelope
     payload: Record<string, unknown>
+    onEvent?: (event: unknown) => void
   }): Promise<unknown>
   dispose?(): Promise<void>
 }
@@ -45,6 +46,7 @@ export class DesktopHostContributionRuntime {
   async invoke(input: {
     envelope: KernelInvocationEnvelope
     payload: Record<string, unknown>
+    onEvent?: (event: unknown) => void
   }): Promise<unknown> {
     const selected = input.envelope.selectedContribution
     const contribution = this.#loaded.get(

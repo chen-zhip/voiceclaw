@@ -90,6 +90,7 @@ export interface SessionConfigEvent {
   // single-provider speech-to-speech path; "stt-tts" composes STT → Harness →
   // TTS. Absent field means s2s, so older clients are unaffected.
   mode?: SessionMode
+  inputMode?: 'microphone' | 'text'
   sttProvider?: string
   ttsProvider?: string
   harness?: string
@@ -102,6 +103,10 @@ export interface SessionConfigEvent {
   sttConfig?: STTWireConfig
   ttsConfig?: TTSWireConfig
   harnessConfig?: HarnessWireConfig
+  // PCM sample rate of the audio this client streams in `audio.append`.
+  // Desktop captures at 24 kHz; a provider that needs another rate resamples
+  // from this instead of assuming a rate of its own.
+  audioSampleRate?: number
   // Which output streams the client wants. Thinking is never included — it is
   // debug-only and stays server-side.
   outputPreference?: OutputPreference

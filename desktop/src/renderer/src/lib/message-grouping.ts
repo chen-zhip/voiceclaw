@@ -6,7 +6,7 @@ export interface GroupMessagesOptions {
 }
 
 export type GroupedItem =
-  | { kind: 'separator', label: string, timestamp: number }
+  | { kind: 'separator'; label: string; timestamp: number }
   | {
       kind: 'message'
       message: Message
@@ -19,7 +19,7 @@ const DAY_MS = 24 * 60 * 60 * 1000
 
 export function groupMessages(
   messages: Message[],
-  options: GroupMessagesOptions = {},
+  options: GroupMessagesOptions = {}
 ): GroupedItem[] {
   const burstThreshold = options.burstThresholdMs ?? DEFAULT_BURST_THRESHOLD_MS
   const now = options.now ?? Date.now()
@@ -92,6 +92,14 @@ export function formatExactTimestamp(ts: number, now: number = Date.now()): stri
   })
 }
 
+export function formatLatencySummary(message: Message): string | null {
+  if (message.stt_latency_ms == null) return null
+  const parts = [`STT ${Math.round(message.stt_latency_ms)}ms`]
+  if (message.llm_latency_ms != null) parts.push(`LLM ${Math.round(message.llm_latency_ms)}ms`)
+  if (message.tts_latency_ms != null) parts.push(`TTS ${Math.round(message.tts_latency_ms)}ms`)
+  return parts.join(' / ')
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -129,10 +137,14 @@ function formatDaySeparator(ts: number, now: number): string {
     return `${d.toLocaleDateString(undefined, { weekday: 'long' })} ${time}`
   }
   const sameYear = d.getFullYear() === new Date(now).getFullYear()
-  return d.toLocaleDateString(undefined, sameYear
-    ? { month: 'short', day: 'numeric' }
-    : { month: 'short', day: 'numeric', year: 'numeric' })
-    + ` ${time}`
+  return (
+    d.toLocaleDateString(
+      undefined,
+      sameYear
+        ? { month: 'short', day: 'numeric' }
+        : { month: 'short', day: 'numeric', year: 'numeric' }
+    ) + ` ${time}`
+  )
 }
 
 function formatBurstSeparator(ts: number, _now: number): string {
